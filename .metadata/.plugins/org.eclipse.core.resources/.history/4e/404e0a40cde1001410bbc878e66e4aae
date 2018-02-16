@@ -1,0 +1,11 @@
+public class Main {
+
+	public static void main(String[] args) {
+		ProducerConsumerWithThreadPool pc = new ProducerConsumerWithThreadPool();
+		pc.init();
+		pc.produceTask();
+		pc.consumeTask();
+		
+	}
+
+}

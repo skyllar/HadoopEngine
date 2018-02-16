@@ -1,0 +1,79 @@
+package com.hdfs;
+
+import ThreadPool;
+
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class MapReduceTaskWithThreadPool {
+	private static AtomicInteger rnd = new AtomicInteger(0);
+	// private final BlockingQueue<Integer> queue;
+	ThreadPool pool;
+	TaskTrackerConfiguration tTCnf;
+
+	public MapReduceTaskWithThreadPool(TaskTrackerConfiguration tTCnf) {
+		// queue = new LinkedBlockingQueue<>(3);
+
+		this.tTCnf = tTCnf;
+	}
+
+	public void submitMapTask(int taskId) {
+		pool.addTask(new Producer());
+
+	}
+
+	public void submitReduceTask(int taskId) {
+		pool.addTask(new Consumer());
+	}
+
+	public void createMapperThreadPool() {
+		ThreadPool mapperPool = new ThreadPool(2);
+		this.mapperPool = mapperPool;
+	}
+	
+	public void createMapperThreadPool() {
+		ThreadPool reducerPool = new ThreadPool(2);
+		this.reducerPool = reducerPool;
+	}
+		// for (int i = 0; i < 100; i++) {
+		// pool.addTask(new Producer());
+		// pool.addTask(new Producer());
+		// pool.addTask(new Producer());
+		//
+		// pool.addTask(new Consumer());
+		// pool.addTask(new Consumer());
+		// pool.addTask(new Consumer());
+		// }
+	}
+
+	public void shutDownPool() {
+		pool.shutdown();
+	}
+
+	private class Producer implements Runnable {
+		@Override
+		public void run() {
+			Integer i = rnd.incrementAndGet();
+			System.out.println("Inserting Element " + i);
+			try {
+				// queue.put(e);
+				// Thread.sleep(1000);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}
+	}
+
+	private class Consumer implements Runnable {
+		@Override
+		public void run() {
+			try {
+				// System.out.println("Removing Element " + queue.take());
+				// Thread.sleep(1000);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}
+	}
+}

@@ -1,0 +1,5 @@
+package com.a;
+
+public interface IMapper {
+	public String map(String input);
+}

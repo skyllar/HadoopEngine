@@ -1,0 +1,324 @@
+package com.hdfs;
+
+import java.rmi.RemoteException;
+import java.rmi.server.UnicastRemoteObject;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Set;
+
+import com.hdfs.MapReduce.HeartBeatResponse;
+import com.hdfs.MapReduce.JobStatusRequest;
+import com.hdfs.MapReduce.JobStatusResponse;
+import com.hdfs.MapReduce.JobSubmitRequest;
+import com.hdfs.MapReduce.JobSubmitResponse;
+import com.hdfs.MapReduce.MapTaskInfo;
+import com.hdfs.MapReduce.MapTaskStatus;
+import com.hdfs.MapReduce.ReduceTaskStatus;
+import com.hdfs.MapReduce.ReducerTaskInfo;
+
+public class JobTrackerInterfaceImpl extends UnicastRemoteObject implements
+		IJobTracker {
+
+	NameNodeConfiguration nNCnf;
+
+	HashMap<Integer, Integer> mapTaskIdToTaskTrackerId = new HashMap<Integer, Integer>();
+
+	HashMap<Integer, JobStatusResponse> jobStatus = new HashMap<Integer, JobStatusResponse>();
+
+	// / mapping of jobId to its Blocks still left for scheduling for map tasks
+	// on it
+	LinkedHashMap<Integer, ArrayList<Integer>> mapJobIdToBlocksInMapperQueue = new LinkedHashMap<Integer, ArrayList<Integer>>();
+
+	// / mapping of jobId to its taskId's scheduled for mapping and waiting for
+	// completion of map task
+	LinkedHashMap<Integer, ArrayList<Integer>> mapJobIdToTaskIdInMapperQueue = new LinkedHashMap<Integer, ArrayList<Integer>>();
+
+	// / mapping of jobId to its output files still left for scheduling for
+	// reduce tasks
+	LinkedHashMap<Integer, ArrayList<String>> mapJobIdToOutputFilesInReducerQueue = new LinkedHashMap<Integer, ArrayList<String>>();
+
+	// / mapping of jobId to its task Id's scheduled for reducing and waiting
+	// for
+	// completion of reduce task
+	LinkedHashMap<Integer, ArrayList<Integer>> mapJobIdToTaskIdInReducerQueue = new LinkedHashMap<Integer, ArrayList<Integer>>();
+
+	HashMap<Integer, String> mapJobIdToFileName = new HashMap<Integer, String>();
+
+	protected JobTrackerInterfaceImpl(
+			NameNodeConfiguration nameNodeConfiguration) throws RemoteException {
+		super();
+		nNCnf = nameNodeConfiguration;
+	}
+
+	@Override
+	public byte[] jobSubmit(byte[] input) throws RemoteException {
+		System.out.println("New Job Requested..");
+		byte[] outputData = null;
+
+		try {
+			JobSubmitRequest jobSubmitRequest = JobSubmitRequest
+					.parseFrom(input);
+
+			JobSubmitResponse.Builder jobSubmitResponseBuilder = JobSubmitResponse
+					.newBuilder();
+
+			String mapperName = jobSubmitRequest.getMapName();
+			String reducerName = jobSubmitRequest.getReducerName();
+			String inputFileInHDFS = jobSubmitRequest.getInputFile();
+			String outputFileInHDFS = jobSubmitRequest.getOutputFile();
+			Integer numOfReducers = jobSubmitRequest.getNumReduceTasks();
+
+			int status;
+			int jobId;
+
+			if (nNCnf.nameNodeHelper.fileNameToFileBlocks
+					.containsKey(inputFileInHDFS)
+					&& nNCnf.nameNodeHelper.fileNameToFileBlocks.get(
+							inputFileInHDFS).size() > 0) {
+				status = 1;
+				jobId = ++nNCnf.jobIdCounter;
+				mapJobIdToFileName.put(jobId, inputFileInHDFS);
+				ArrayList<Integer> blocksList = nNCnf.nameNodeHelper.fileNameToFileBlocks
+						.get(jobId);
+				HashMap<Integer, ArrayList<Integer>> fileBlockToDataNodeId = nNCnf.nameNodeHelper.fileBlockToDataNodeId;
+
+				mapJobIdToBlocksInMapperQueue.put(jobId,
+						new ArrayList<Integer>());
+
+				mapJobIdToBlocksInMapperQueue.get(jobId).addAll(blocksList);
+
+				JobStatusResponse.Builder jobStatusResponseBuilder = JobStatusResponse
+						.newBuilder();
+				jobStatusResponseBuilder.setJobDone(false);
+
+				jobStatus.put(jobId, jobStatusResponseBuilder.build());
+			} else {
+				status = 0;
+				jobId = -1;
+			}
+
+			jobSubmitResponseBuilder.setStatus(status);
+			jobSubmitResponseBuilder.setJobId(jobId);
+
+			outputData = jobSubmitResponseBuilder.build().toByteArray();
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return outputData;
+	}
+
+	@Override
+	public byte[] getJobStatus(byte[] input) throws RemoteException {
+
+		byte[] output = null;
+
+		try {
+			JobStatusRequest jobStatusRequest = JobStatusRequest
+					.parseFrom(input);
+			int jobId = jobStatusRequest.getJobId();
+
+			output = jobStatus.get(jobId).toByteArray();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		return output;
+	}
+
+	@Override
+	public byte[] heartBeat(byte[] input) throws RemoteException {
+
+		byte[] output = null;
+
+		try {
+			MapReduce.HeartBeatRequest heartBeatRequest = MapReduce.HeartBeatRequest
+					.parseFrom(input);
+
+			System.out.println("TaskTracker HeartBeatRequest recieved...");
+			Integer taskTrackerId = heartBeatRequest.getTaskTrackerId();
+			Integer mapSlotsFree = heartBeatRequest.getNumMapSlotsFree();
+			Integer reduceSlotsFree = heartBeatRequest.getNumReduceSlotsFree();
+			ArrayList<MapTaskStatus> mapTasksOnTT = null;
+			ArrayList<ReduceTaskStatus> reduceTasksOnTT = null;
+
+			if (heartBeatRequest.getMapStatusList().size() > 0)
+				mapTasksOnTT = (ArrayList<MapTaskStatus>) heartBeatRequest
+						.getMapStatusList();
+
+			if (heartBeatRequest.getReduceStatusList().size() > 0)
+				reduceTasksOnTT = (ArrayList<ReduceTaskStatus>) heartBeatRequest
+						.getReduceStatusList();
+
+			if (mapTasksOnTT != null) {
+				for (MapTaskStatus mapTaskStatus : mapTasksOnTT) {
+					int jobId = mapTaskStatus.getJobId();
+					int taskId = mapTaskStatus.getTaskId();
+					boolean isTaskCompleted = mapTaskStatus.getTaskCompleted();
+					String mapOutputFile = mapTaskStatus.getMapOutputFile();
+
+					if (isTaskCompleted == true) {
+
+						// remove from map
+						mapJobIdToTaskIdInMapperQueue.get(jobId).remove(taskId);
+
+						// add to reducer queue for scheduling
+						if (!mapJobIdToOutputFilesInReducerQueue
+								.containsKey(jobId))
+							mapJobIdToOutputFilesInReducerQueue.put(jobId,
+									new ArrayList<String>());
+						mapJobIdToOutputFilesInReducerQueue.get(jobId).add(
+								mapOutputFile);
+
+						if (mapJobIdToTaskIdInMapperQueue.get(jobId).size() == 0
+								&& mapJobIdToBlocksInMapperQueue.get(jobId)
+										.size() == 0) {
+
+							mapJobIdToTaskIdInMapperQueue.remove(jobId);
+							mapJobIdToBlocksInMapperQueue.remove(jobId);
+						}
+					}
+				}
+			}
+
+			if (reduceTasksOnTT != null) {
+				for (ReduceTaskStatus reduceTaskStatus : reduceTasksOnTT) {
+					int jobId = reduceTaskStatus.getJobId();
+					int taskId = reduceTaskStatus.getTaskId();
+					boolean isTaskCompleted = reduceTaskStatus
+							.getTaskCompleted();
+
+					if (isTaskCompleted == true) {
+						if (mapJobIdToTaskIdInReducerQueue.containsKey(jobId)) {
+							mapJobIdToTaskIdInReducerQueue.get(jobId).remove(
+									taskId);
+							if (mapJobIdToOutputFilesInReducerQueue.get(jobId)
+									.size() == 0
+									&& mapJobIdToTaskIdInReducerQueue
+											.get(jobId).size() == 0) {
+
+								mapJobIdToTaskIdInReducerQueue.remove(jobId);
+								mapJobIdToOutputFilesInReducerQueue
+										.remove(jobId);
+
+								JobStatusResponse.Builder jobStatusResponseBuilder = JobStatusResponse
+										.newBuilder();
+								jobStatusResponseBuilder.setJobDone(true);
+								jobStatusResponseBuilder
+										.setNumMapTasksStarted(jobStatus.get(
+												jobId).getNumMapTasksStarted());
+								jobStatusResponseBuilder
+										.setNumReduceTasksStarted(jobStatus
+												.get(jobId)
+												.getNumReduceTasksStarted());
+								jobStatusResponseBuilder
+										.setTotalMapTasks(jobStatus.get(jobId)
+												.getNumMapTasksStarted());
+								jobStatusResponseBuilder
+										.setTotalReduceTasks(jobStatus.get(
+												jobId).getTotalReduceTasks());
+
+								jobStatus.put(jobId,
+										jobStatusResponseBuilder.build());
+							}
+						}
+					}
+				}
+			}
+			MapReduce.HeartBeatResponse.Builder heartBeatResponseBuilder = HeartBeatResponse
+					.newBuilder();
+			int status = 1;
+
+			MapTaskInfo.Builder mapTaskInfoBuilder = MapTaskInfo.newBuilder();
+
+			int i = 0;
+
+			if (mapSlotsFree > 0) {
+				if (mapJobIdToBlocksInMapperQueue.size() != 0) {
+
+					Set<Integer> keys = mapJobIdToBlocksInMapperQueue.keySet();
+					Iterator it = keys.iterator();
+					Integer jobId = (Integer) it.next();
+
+					ArrayList<Integer> blocks = mapJobIdToBlocksInMapperQueue
+							.get(jobId);
+
+					for (Integer block : blocks) {
+						if (nNCnf.nameNodeHelper.fileBlockToDataNodeId.get(
+								block).contains(taskTrackerId)) {
+							// assign work
+							mapTaskInfoBuilder.setInputBlocks(i, block);
+							i++;
+							mapJobIdToBlocksInMapperQueue.get(jobId).remove(
+									block);
+						}
+					}
+
+					int taskId = nNCnf.taskId++;
+
+					mapTaskInfoBuilder.setJobId(jobId);
+					mapTaskInfoBuilder.setTaskId(taskId);
+
+					if (!mapJobIdToTaskIdInMapperQueue.containsKey(jobId))
+						mapJobIdToTaskIdInMapperQueue.put(jobId,
+								new ArrayList<Integer>());
+					mapJobIdToTaskIdInMapperQueue.get(jobId).add(taskId);
+
+				}
+			}
+
+			heartBeatResponseBuilder.addMapTasks(mapTaskInfoBuilder.build());
+			ReducerTaskInfo.Builder reducerTaskInfoBuilder = MapReduce.ReducerTaskInfo
+					.newBuilder();
+			i = 0;
+			if (reduceSlotsFree > 0) {
+				if (mapJobIdToTaskIdInMapperQueue.size() == 0
+						&& mapJobIdToBlocksInMapperQueue.size() == 0) {
+					if (mapJobIdToOutputFilesInReducerQueue.size() > 0) {
+						Set<Integer> keys = mapJobIdToOutputFilesInReducerQueue
+								.keySet();
+						Iterator it = keys.iterator();
+						Integer jobId = (Integer) it.next();
+
+						ArrayList<String> fileNames = mapJobIdToOutputFilesInReducerQueue
+								.get(jobId);
+
+						for (String outFileName : fileNames) {
+
+							String[] split = outFileName.split("_<");
+							if (split[1].contains(taskTrackerId.toString())) {
+
+								reducerTaskInfoBuilder.setMapOutputFiles(i,
+										outFileName);
+								mapJobIdToOutputFilesInReducerQueue.get(jobId)
+										.remove(outFileName);
+							}
+							i++;
+						}
+
+						int taskId = nNCnf.taskId++;
+
+						reducerTaskInfoBuilder.setJobId(jobId);
+						reducerTaskInfoBuilder.setTaskId(taskId);
+
+						if (!mapJobIdToTaskIdInReducerQueue.containsKey(jobId))
+							mapJobIdToTaskIdInReducerQueue.put(jobId,
+									new ArrayList<Integer>());
+						mapJobIdToTaskIdInReducerQueue.get(jobId).add(taskId);
+					}
+				}
+			}
+
+			heartBeatResponseBuilder.addReduceTasks(reducerTaskInfoBuilder
+					.build());
+			heartBeatResponseBuilder.setStatus(status);
+
+			output = heartBeatResponseBuilder.build().toByteArray();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return output;
+	}
+}

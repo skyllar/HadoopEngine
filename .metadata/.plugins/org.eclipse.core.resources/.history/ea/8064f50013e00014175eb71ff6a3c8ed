@@ -1,0 +1,495 @@
+package com.hdfs;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.rmi.RemoteException;
+import java.rmi.server.UnicastRemoteObject;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Set;
+
+import com.hdfs.HDFS.AssignBlockRequest;
+import com.hdfs.HDFS.AssignBlockResponse;
+import com.hdfs.HDFS.BlockLocationRequest;
+import com.hdfs.HDFS.BlockLocationResponse;
+import com.hdfs.HDFS.BlockLocations;
+import com.hdfs.HDFS.BlockReportRequest;
+import com.hdfs.HDFS.BlockReportResponse;
+import com.hdfs.HDFS.CloseFileRequest;
+import com.hdfs.HDFS.CloseFileResponse;
+import com.hdfs.HDFS.DataNodeLocation;
+import com.hdfs.HDFS.HeartBeatRequest;
+import com.hdfs.HDFS.HeartBeatResponse;
+import com.hdfs.HDFS.ListFilesRequest;
+import com.hdfs.HDFS.ListFilesResponse;
+import com.hdfs.HDFS.OpenFileRequest;
+import com.hdfs.HDFS.OpenFileResponse;
+
+public class NameNodeInterfaceImpl extends UnicastRemoteObject implements
+		INameNode {
+
+	NameNodeInterfaceImpl(NameNodeConfiguration nameNodeConfiguration)
+			throws RemoteException {
+		super();
+		nNCnf = nameNodeConfiguration;
+		initialiseEnvironment();
+
+	}
+
+	// mapping of alive datanode id to its location
+	HashMap<Integer, DataNodeLocation> aliveDataNodetoLocation = new HashMap<Integer, DataNodeLocation>();
+
+	// mapping of blocks to data node id
+	HashMap<Integer, ArrayList<Integer>> fileBlockToDataNodeId = new HashMap<Integer, ArrayList<Integer>>();
+
+	// mapping of file handle to fileName
+	HashMap<Integer, String> fileHandleToFileName = new HashMap<Integer, String>();
+
+	HashMap<Integer, ArrayList<Integer>> freshFileHandlesToFileBlocks = new HashMap<Integer, ArrayList<Integer>>();
+
+	// mapping of file to blocks
+	HashMap<String, ArrayList<Integer>> fileNameToFileBlocks = new HashMap<String, ArrayList<Integer>>();
+
+	// mapping of dataNodeId to its last pinging time
+	HashMap<Integer, Long> dataNodeIdToTime = new HashMap<Integer, Long>();
+
+	NameNodeConfiguration nNCnf;
+
+	private void initialiseEnvironment() {
+		try {
+			File file = new File(nNCnf.fileToBlocksRegistryDir + "/"
+					+ nNCnf.fileToBlocksRegistryFileName);
+			if (!file.exists())
+				file.createNewFile();
+
+			BufferedReader bufferedReader = new BufferedReader(new FileReader(
+					file));
+			String line;
+			while ((line = bufferedReader.readLine()) != null) {
+				String[] field = line
+						.split(nNCnf.fileToBlocksRegistryDelimiter);
+
+				if (line.length() == 0)
+					continue;
+
+				if (field.length == 1) {
+					System.out
+							.println("Error Reading File to Blocks Information from file");
+					return;
+				} else {
+					ArrayList<Integer> blocks = new ArrayList<Integer>();
+					for (int i = 1; i < field.length; i++) {
+						try {
+							int blockNumber = Integer.parseInt(field[i]);
+							blocks.add(blockNumber);
+						} catch (Exception e) {
+							e.printStackTrace();
+							System.out
+									.println("Error Reading File to Blocks Information from file");
+						}
+					}
+					fileNameToFileBlocks.put(field[0], blocks);
+				}
+			}
+
+			bufferedReader.close();
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	public int assignFileHandle() {
+		return ++nNCnf.fileDescriptor;
+	}
+
+	public ArrayList<Integer> getDataNodesForReplication() {
+
+		ArrayList<Integer> dataNodesForReplication = new ArrayList<Integer>();
+		Long timePassed;
+
+		System.out.println("###:" + aliveDataNodetoLocation);
+		for (Integer dataNodeId : aliveDataNodetoLocation.keySet()) {
+			// System.out.println("In Alive DataNodes.....");
+
+			timePassed = System.currentTimeMillis()
+					- dataNodeIdToTime.get(dataNodeId);
+			if (timePassed <= nNCnf.thresholdTime) {
+				dataNodesForReplication.add(dataNodeId);
+			} else {
+				System.out.println("Threshold Time Reached For Datanode:"
+						+ dataNodeId);
+			}
+		}
+
+		// dataNodesForReplication.addAll(aliveDataNodetoLocation.keySet());
+
+		Collections.shuffle(dataNodesForReplication);
+
+		System.out.println("$$$$Replicated Datanodes:"
+				+ dataNodesForReplication);
+
+		if (dataNodesForReplication.size() < nNCnf.replicationFactor)
+			return dataNodesForReplication;
+		else {
+			ArrayList<Integer> trimmedDataNodesForReplication = new ArrayList<Integer>();
+			for (int i = 0; i < nNCnf.replicationFactor; i++) {
+				trimmedDataNodesForReplication.add(dataNodesForReplication
+						.get(i));
+			}
+			return trimmedDataNodesForReplication;
+		}
+	}
+
+	public int getNewBlock() {
+		++nNCnf.blockNumber;
+		try {
+			File file = new File(nNCnf.lastBlockNumberFile);
+			BufferedWriter bufferedWriter = new BufferedWriter(new FileWriter(
+					file));
+			bufferedWriter.write("lastBlockNumber=" + nNCnf.blockNumber);
+			bufferedWriter.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+
+		return nNCnf.blockNumber;
+	}
+
+	private void updateNewBlocksForFile(int fileHandle, int newBlockNumber,
+			ArrayList<Integer> dataNodesForReplication) {
+
+		System.out.println("-------new file handle:" + fileHandle);
+		// update map fileBlockToDataNodeId
+		fileBlockToDataNodeId.put(newBlockNumber, dataNodesForReplication);
+
+		if (!fileNameToFileBlocks.containsKey(fileHandleToFileName
+				.get(fileHandle))) {
+			ArrayList<Integer> nodes = new ArrayList<Integer>();
+			fileNameToFileBlocks.put(fileHandleToFileName.get(fileHandle),
+					nodes);
+			ArrayList<Integer> nodes1 = new ArrayList<Integer>();
+			freshFileHandlesToFileBlocks.put(fileHandle, nodes1);
+		}
+
+		// update fileNameToFileBlocks
+		fileNameToFileBlocks.get(fileHandleToFileName.get(fileHandle)).add(
+				newBlockNumber);
+		freshFileHandlesToFileBlocks.get(fileHandle).add(newBlockNumber);
+
+	}
+
+	@Override
+	public byte[] openFile(byte[] input) {
+
+		byte[] outputData = null;
+
+		try {
+			OpenFileRequest openFileRequest = OpenFileRequest.parseFrom(input);
+			OpenFileResponse.Builder openFileResponseBuilder = OpenFileResponse
+					.newBuilder();
+
+			String fileName = openFileRequest.getFileName();
+			boolean forRead = openFileRequest.getForRead();
+
+			// If file exists
+
+			if (forRead == true) // file opened in read mode
+			{
+				System.out.println("File request in Read Mode");
+
+				if (fileNameToFileBlocks.containsKey(fileName) == true) {
+
+					openFileResponseBuilder.setStatus(1); // 1 for read
+					for (int blockNumber : fileNameToFileBlocks.get(fileName))
+						openFileResponseBuilder.addBlockNums(blockNumber);
+					Integer newFileHandle = assignFileHandle();
+					fileHandleToFileName.put(newFileHandle, fileName);
+					openFileResponseBuilder.setHandle(newFileHandle);
+				} else {
+					openFileResponseBuilder.setStatus(0);
+					System.out.println("Sorry File Not Present..");
+				}
+			} else // file opened in write mode
+			{
+				System.out.println("File request in Write Mode");
+				if (fileNameToFileBlocks.containsKey(fileName)) {
+					openFileResponseBuilder.setStatus(0);
+					System.out.println("You Cannot Overwrite File...");
+				} else {
+					openFileResponseBuilder.setStatus(2); // 2 for write
+					Integer newFileHandle = assignFileHandle();
+					System.out.println("*****Assigned file handle"
+							+ newFileHandle);
+					fileHandleToFileName.put(newFileHandle, fileName);
+					openFileResponseBuilder.setHandle(newFileHandle);
+				}
+			}
+
+			outputData = openFileResponseBuilder.build().toByteArray();
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		return outputData;
+	}
+
+	private void checkEntryToFileToBlocksRegistry(int fileHandle) {
+		try {
+			if (freshFileHandlesToFileBlocks.containsKey(fileHandle)) {
+				BufferedWriter bufferedWriter = new BufferedWriter(
+						new FileWriter(nNCnf.fileToBlocksRegistryDir + "/"
+								+ nNCnf.fileToBlocksRegistryFileName, true));
+				StringBuilder stringBuilder = new StringBuilder();
+
+				for (Integer blockNumber : freshFileHandlesToFileBlocks
+						.get(fileHandle)) {
+					stringBuilder.append("~" + blockNumber);
+				}
+				bufferedWriter.write("\n"
+						+ fileHandleToFileName.get(fileHandle) + stringBuilder);
+				bufferedWriter.close();
+				freshFileHandlesToFileBlocks.remove(fileHandle);
+			}
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	@Override
+	public byte[] closeFile(byte[] input) {
+		byte[] outputData = null;
+
+		try {
+			System.out.println("Close File Request Recieved....");
+			CloseFileRequest closeFileRequest = CloseFileRequest
+					.parseFrom(input);
+			CloseFileResponse.Builder closeFileResponseBuilder = CloseFileResponse
+					.newBuilder();
+
+			int fileHandle = closeFileRequest.getHandle();
+
+			// if valid file handle
+			if (fileHandleToFileName.containsKey(fileHandle)) {
+
+				checkEntryToFileToBlocksRegistry(fileHandle);
+				fileHandleToFileName.remove(fileHandle);
+				closeFileResponseBuilder.setStatus(1); // 1 for success
+
+			} else { // if invalid file handle
+
+				closeFileResponseBuilder.setStatus(0); // o for failure
+
+			}
+
+			outputData = closeFileResponseBuilder.build().toByteArray();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		return outputData;
+	}
+
+	@Override
+	public byte[] getBlockLocations(byte[] input) {
+		byte[] outputData = null;
+		try {
+			System.out.println("getBlockLocations request recieved..");
+
+			BlockLocationRequest blockLocationRequest = BlockLocationRequest
+					.parseFrom(input);
+			BlockLocationResponse.Builder blockLocationResponseBuilder = BlockLocationResponse
+					.newBuilder();
+
+			BlockLocations.Builder blockLocations;
+
+			// 1 for success
+			blockLocationResponseBuilder.setStatus(1);
+			System.out.println("Blocks locations to be sent are : "
+					+ blockLocationRequest.getBlockNumsList() + "----");
+
+			for (int blockNumber : blockLocationRequest.getBlockNumsList()) {
+
+				// if block present
+				if (fileBlockToDataNodeId.containsKey(blockNumber)) {
+
+					// adding datanode locations
+					blockLocations = BlockLocations.newBuilder();
+					blockLocations.setBlockNumber(blockNumber);
+
+					for (Integer dataNodeId : fileBlockToDataNodeId
+							.get(blockNumber)) {
+						blockLocations.addLocations(aliveDataNodetoLocation
+								.get(dataNodeId));
+					}
+
+					blockLocationResponseBuilder
+							.addBlockLocations(blockLocations);
+				} else { // if block not present
+					// 0 for failure
+					blockLocationResponseBuilder.setStatus(0);
+				}
+			}
+
+			outputData = blockLocationResponseBuilder.build().toByteArray();
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return outputData;
+	}
+
+	@Override
+	public byte[] assignBlock(byte[] input) {
+		byte[] outputData = null;
+		try {
+			System.out.println("Assign Block Request Recieved...");
+			AssignBlockRequest assignBlockRequest = AssignBlockRequest
+					.parseFrom(input);
+			AssignBlockResponse.Builder assignBlockResponseBuilder = AssignBlockResponse
+					.newBuilder();
+
+			ArrayList<Integer> dataNodesForReplication = getDataNodesForReplication();
+
+			int newBlockNumber = getNewBlock();
+			int fileHandle = assignBlockRequest.getHandle();
+			System.out.println("Now assigning block Number:" + newBlockNumber);
+			// System.out.println("-----" + dataNodesForReplication + "-----");
+
+			if (fileHandleToFileName.containsKey(fileHandle)
+					&& dataNodesForReplication.size() > 0) {
+
+				// 1 for success
+				assignBlockResponseBuilder.setStatus(1);
+
+				updateNewBlocksForFile(fileHandle, newBlockNumber,
+						dataNodesForReplication);
+
+				BlockLocations.Builder blockLocations = BlockLocations
+						.newBuilder();
+
+				blockLocations.setBlockNumber(newBlockNumber);
+
+				for (int blockNum : dataNodesForReplication) {
+					blockLocations.addLocations(aliveDataNodetoLocation
+							.get(blockNum));
+				}
+
+				// System.out.println("&&&&&&!!!@@@" + blockLocations);
+				assignBlockResponseBuilder.setNewBlock(blockLocations);
+
+			} else {
+				System.out.println("Sorry could not assign blocks..");
+				// 0 for failure
+				assignBlockResponseBuilder.setStatus(0);
+			}
+
+			outputData = assignBlockResponseBuilder.build().toByteArray();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return outputData;
+	}
+
+	@Override
+	public byte[] list(byte[] input) {
+		byte[] outputData = null;
+		try {
+			ListFilesRequest listFilesRequest = ListFilesRequest
+					.parseFrom(input);
+			ListFilesResponse.Builder listFilesResponseBuilder = ListFilesResponse
+					.newBuilder();
+			String directoryName = listFilesRequest.getDirName();
+			listFilesResponseBuilder.setStatus(1);
+			Set<String> fileNames = fileNameToFileBlocks.keySet();
+			listFilesResponseBuilder.addAllFileNames(fileNames);
+			outputData = listFilesResponseBuilder.build().toByteArray();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return outputData;
+	}
+
+	@Override
+	public byte[] blockReport(byte[] input) {
+		byte[] outputData = null;
+		try {
+
+			BlockReportRequest blockReportRequest = BlockReportRequest
+					.parseFrom(input);
+			BlockReportResponse.Builder blockReportResponseBuilder = BlockReportResponse
+					.newBuilder();
+
+			int dataNodeId = blockReportRequest.getId();
+
+			DataNodeLocation newDataNodeLocation = blockReportRequest
+					.getLocation();
+
+			// System.out.println("Block Report From Datanode id:" + dataNodeId
+			// + " and datanodelocation:" + newDataNodeLocation);
+
+			// adding entry to datanode id to ip mapping
+			aliveDataNodetoLocation.put(dataNodeId, newDataNodeLocation);
+			// System.out.println("Status of Alive DataNodes :"
+			// + aliveDataNodetoLocation);
+
+			for (Integer blockNum : blockReportRequest.getBlockNumbersList()) {
+
+				// adding entry block to data node id map
+				if (fileBlockToDataNodeId.containsKey(blockNum)) {
+					if (!fileBlockToDataNodeId.get(blockNum).contains(
+							dataNodeId)) {
+						fileBlockToDataNodeId.get(blockNum).add(dataNodeId);
+					}
+				} else {
+					ArrayList<Integer> dataNodes = new ArrayList<Integer>();
+					dataNodes.add(dataNodeId);
+					fileBlockToDataNodeId.put(blockNum, dataNodes);
+				}
+				blockReportResponseBuilder.addStatus(1); // 1 for success
+			}
+
+			outputData = blockReportResponseBuilder.build().toByteArray();
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return outputData;
+	}
+
+	@Override
+	public byte[] heartBeat(byte[] input) {
+		byte[] outputData = null;
+		try {
+			HeartBeatRequest heartBeatRequest = HeartBeatRequest
+					.parseFrom(input);
+			HeartBeatResponse.Builder heartBeatResponseBuilder = HeartBeatResponse
+					.newBuilder();
+
+			Integer dataNodeId = heartBeatRequest.getId();
+
+			// System.out.println("HeartBeat From Datanode id:" + dataNodeId);
+
+			dataNodeIdToTime.put(dataNodeId, System.currentTimeMillis());
+			heartBeatResponseBuilder.setStatus(1);
+			outputData = heartBeatResponseBuilder.build().toByteArray();
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return outputData;
+	}
+
+	@Override
+	public void test() {
+		System.out.println("test function called.. ");
+
+	}
+
+}

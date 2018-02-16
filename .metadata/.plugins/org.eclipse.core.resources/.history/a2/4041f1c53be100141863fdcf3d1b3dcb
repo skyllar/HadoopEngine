@@ -1,0 +1,20 @@
+package com.hdfs;
+
+public class ClientConfiguration {
+
+	public String fileLocationToWriteFrom;
+	public String nameNodeIP;
+	public Integer nameNodePort;
+	public String nameNodeRefernce;
+	public String dataNodeRefernce;
+	public Integer blockSize;
+	public Integer jobStatusTimerDelay;
+
+	// public IJobTracker jobTrackerStub;
+
+	public String jobTrackerIP;
+
+	public Integer jobTrackerPort;
+
+	public String jobTrackerRefernce;
+}

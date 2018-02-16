@@ -1,0 +1,39 @@
+package com.hdfs;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
+
+public class JobProgress {
+
+	String mapName; // Java class, or name of C .so
+	String reducerName; // Java class, or name of C .so
+	String inputFile;
+	String outputFile;
+
+	// int numReduceTasks5;
+
+	int status;
+	boolean isJobDone;
+	int totalMapTasks;
+	int numMapTasksStarted;
+	int totalReduceTasks;
+	int numReduceTasksStarted;
+
+	ArrayList<Integer> blockList = new ArrayList<Integer>();
+
+	ArrayList<String> outputMapFilesList = new ArrayList<String>();
+
+	ArrayList<String> outputReducedFilesList = new ArrayList<String>();
+
+	// blocksLeftForMapping
+	LinkedList<Integer> blocksLeftForMapping = new LinkedList<Integer>();
+
+	// outputMapFilesLeftFor Reducing
+	LinkedList<String> outputMapFilesLeftForReducing = new LinkedList<String>();
+
+	// map blockId to its
+	// HashMap<Integer,HashMap<>> blocksLeftForMapTasks = new HashMap<Integer,>
+
+	// map tas
+}

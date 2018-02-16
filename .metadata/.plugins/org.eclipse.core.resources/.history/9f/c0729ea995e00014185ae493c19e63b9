@@ -1,0 +1,8 @@
+package com.hdfs;
+
+public class MapperTaskDetail {
+	int jobId;
+	//int taskId;
+	boolean taskCompleted;
+	String mapOutputFile;
+}

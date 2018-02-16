@@ -1,0 +1,9 @@
+dataNodeReference=Datanode
+dataNodePort=5001
+dataNodeIP=localhost
+dataNodeId=1
+dataNodeBlocksDirectory=./datanode/
+nameNodeIP=localhost
+nameNodePort=5000
+nameNodeReference=Namenode
+schedulerDelay=2000

@@ -1,0 +1,8 @@
+package com.hdfs;
+
+public class MapTasksProgress {
+	int jobId;
+	int taskId;
+	boolean taskCompleted;
+	String mapOutputFile;
+}

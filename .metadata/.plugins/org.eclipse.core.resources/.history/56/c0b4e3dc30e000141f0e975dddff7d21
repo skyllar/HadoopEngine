@@ -1,0 +1,15 @@
+package com.hdfs;
+
+import java.util.HashMap;
+
+public class JobProgress {
+	int status;
+	boolean isJobDone;
+	int totalMapTasks;
+	int numMapTasksStarted;
+	int totalReduceTasks;
+	int numReduceTasksStarted;
+
+	// map block
+	// HashMap<Integer,HashMap<>> blocksLeftForMapTasks = new HashMap<Integer,>
+}

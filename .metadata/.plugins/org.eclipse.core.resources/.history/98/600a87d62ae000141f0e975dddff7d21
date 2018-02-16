@@ -1,0 +1,12 @@
+package com.hdfs;
+
+import java.util.HashMap;
+
+public class JobProgress {
+	int status = 1;
+	boolean jobDone = 2;
+	int totalMapTasks = 3;
+	int numMapTasksStarted = 4;
+	int totalReduceTasks = 5;
+	int numReduceTasksStarted = 6;
+}

@@ -1,0 +1,12 @@
+package com.hdfs;
+
+import java.util.ArrayList;
+
+public class MapperTaskDetail {
+	int jobId;
+	boolean taskCompleted;
+	String mapOutputFile;
+	int blockNumberToBeMapped;
+	String mapName;
+
+}

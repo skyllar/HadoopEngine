@@ -1,0 +1,84 @@
+package com.hdfs;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+
+public class ReducerThread extends Thread {
+
+	public Thread t;
+	String reducerThreadName;
+	Integer taskId;
+	TaskTrackerConfiguration tTCnf;
+	LinkedHashMap<Integer, ReducerTaskDetail> mapRunningRedcuerIdToTaskInfo;
+
+	public ReducerThread(
+			String reducerThreadNam,
+			LinkedHashMap<Integer, ReducerTaskDetail> mapRunningRedcuerIdToTaskI,
+			TaskTrackerConfiguration taskTrackerConfiguration, Integer taskI) {
+		reducerThreadName = reducerThreadNam;
+		taskId = taskI;
+		mapRunningRedcuerIdToTaskInfo = mapRunningRedcuerIdToTaskI;
+		tTCnf = taskTrackerConfiguration;
+	}
+
+	@Override
+	public void run() {
+		performReduceTask();
+	}
+
+	private void performReduceTask() {
+		System.out.println("*********Reduce Task " + taskId
+				+ " Started************");
+		HDFSMethods hdfsMethods = new HDFSMethods(tTCnf);
+
+		Integer jobId = mapRunningRedcuerIdToTaskInfo.get(taskId).jobId;
+		ArrayList<String> mapOutputFilesToBeReduced = mapRunningRedcuerIdToTaskInfo
+				.get(taskId).mapOutputFilesToBeReduced;
+		String outputFileName = mapRunningRedcuerIdToTaskInfo.get(taskId).outputFile;
+		String reducerName = mapRunningRedcuerIdToTaskInfo.get(taskId).reducerName;
+
+		String reducerOutputFileName = outputFileName + "_" + jobId + "_"
+				+ taskId;
+
+		try {
+			BufferedWriter bufferedWriter = new BufferedWriter(new FileWriter(
+					new File(reducerOutputFileName)));
+			for (String fileToBeReduced : mapOutputFilesToBeReduced) {
+				String fileContent = hdfsMethods
+						.readRemoteFile(fileToBeReduced);
+
+			}
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+
+		// write file in hdfs
+		hdfsMethods.writeRemoteFile(reducerOutputFileName,
+				tTCnf.reducedFilesLocation);
+
+		System.out.println("Reducer Output File Name: " + outputFileName);
+
+		synchronized (mapRunningRedcuerIdToTaskInfo) {
+			mapRunningRedcuerIdToTaskInfo.get(taskId).taskCompleted = true;
+		}
+		synchronized (tTCnf) {
+			tTCnf.freeReduceSlots++;
+		}
+
+		System.out.println("*********Reduce Task " + taskId
+				+ " Done**************");
+	}
+
+	public void start() {
+		System.out.println("Starting Reducer Thread:" + reducerThreadName);
+
+		if (t == null) {
+			t = new Thread(this, reducerThreadName);
+			t.start();
+		}
+	}
+}

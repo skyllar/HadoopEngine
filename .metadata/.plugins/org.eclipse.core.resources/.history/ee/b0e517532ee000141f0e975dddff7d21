@@ -1,0 +1,11 @@
+package com.hdfs;
+
+
+public class JobProgress {
+	int status;
+	boolean jobDone;
+	int totalMapTasks;
+	int numMapTasksStarted;
+	int totalReduceTasks;
+	int numReduceTasksStarted;
+}

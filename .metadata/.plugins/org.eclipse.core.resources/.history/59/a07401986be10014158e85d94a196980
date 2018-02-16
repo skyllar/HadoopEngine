@@ -1,0 +1,11 @@
+package com.a;
+
+
+public class MapTask implements IMapper {
+
+	@Override
+	public String map(String input) {
+		return input;
+	}
+
+}

@@ -1,0 +1,440 @@
+package com.hdfs;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.rmi.RemoteException;
+import java.rmi.server.UnicastRemoteObject;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.Queue;
+
+import com.hdfs.HDFS.BlockLocationResponse;
+import com.hdfs.HDFS.BlockLocations;
+import com.hdfs.MapReduce.HeartBeatResponse;
+import com.hdfs.MapReduce.JobStatusRequest;
+import com.hdfs.MapReduce.JobStatusResponse;
+import com.hdfs.MapReduce.JobSubmitRequest;
+import com.hdfs.MapReduce.JobSubmitResponse;
+import com.hdfs.MapReduce.MapTaskInfo;
+import com.hdfs.MapReduce.MapTaskStatus;
+import com.hdfs.MapReduce.ReduceTaskStatus;
+import com.hdfs.MapReduce.ReducerTaskInfo;
+
+public class JobTrackerInterfaceImpl extends UnicastRemoteObject implements
+		IJobTracker {
+
+	JobTrackerConfiguration jTCnf;
+
+	HashMap<Integer, Integer> mapTaskIdToTaskTrackerId = new HashMap<Integer, Integer>();
+
+	// jobId's in queue for mapping task
+	Queue<Integer> mapperQueue = new LinkedList<Integer>();
+
+	// jobId's in queue for reduce task
+	Queue<Integer> reducerQueue = new LinkedList<Integer>();
+
+	// map job id to its progress details till now
+	HashMap<Integer, JobProgress> mapJobIdToJobProgress = new HashMap<Integer, JobProgress>();
+
+	class Comp implements Comparator<String> {
+
+		@Override
+		public int compare(String s1, String s2) {
+			String a[] = s1.split("_");
+			int x = Integer.parseInt(a[3]);
+			String b[] = s2.split("_");
+			int y = Integer.parseInt(b[3]);
+			if (x > y) {
+				return 1;
+			} else {
+				return -1;
+			}
+		}
+	}
+
+	protected JobTrackerInterfaceImpl(
+			JobTrackerConfiguration jobTrackerConfiguration)
+			throws RemoteException {
+		super();
+		jTCnf = jobTrackerConfiguration;
+	}
+
+	@Override
+	public byte[] jobSubmit(byte[] input) throws RemoteException {
+		System.out.println("New Job Requested..");
+		byte[] outputData = null;
+
+		try {
+			JobSubmitRequest jobSubmitRequest = JobSubmitRequest
+					.parseFrom(input);
+
+			JobSubmitResponse.Builder jobSubmitResponseBuilder = JobSubmitResponse
+					.newBuilder();
+
+			String inputFileInHDFS = jobSubmitRequest.getInputFile();
+
+			int status;
+			int jobId;
+
+			BlockLocationResponse blockLocationResponse = jTCnf.hdfsMethods
+					.openFileInHDFSandGetBlockLoctions(inputFileInHDFS);
+
+			if (blockLocationResponse != null) {
+
+				status = 1;
+				jobId = getNewJobId();
+				mapperQueue.add(jobId);
+				addNewJobInfo(jobSubmitRequest, jobId, blockLocationResponse);
+			} else {
+				status = 0;
+				jobId = -1;
+			}
+
+			jobSubmitResponseBuilder.setStatus(status);
+			jobSubmitResponseBuilder.setJobId(jobId);
+
+			outputData = jobSubmitResponseBuilder.build().toByteArray();
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return outputData;
+	}
+
+	private int getNewJobId() {
+		++jTCnf.jobIdCounter;
+		try {
+			File file = new File(jTCnf.lastJobNumberFile);
+			BufferedWriter bufferedWriter = new BufferedWriter(new FileWriter(
+					file));
+			bufferedWriter.write("lastJobNumber=" + jTCnf.jobIdCounter);
+			bufferedWriter.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+
+		return jTCnf.jobIdCounter;
+	}
+
+	@Override
+	public byte[] getJobStatus(byte[] input) throws RemoteException {
+		byte[] output = null;
+
+		try {
+
+			JobStatusRequest jobStatusRequest = JobStatusRequest
+					.parseFrom(input);
+			int jobId = jobStatusRequest.getJobId();
+			System.out.println("Job Status Request Recieved for Job Id: "
+					+ jobId);
+			JobStatusResponse.Builder jobStatusResponseBuilder = JobStatusResponse
+					.newBuilder();
+
+			jobStatusResponseBuilder
+					.setStatus(mapJobIdToJobProgress.get(jobId).status);
+			jobStatusResponseBuilder.setJobDone(mapJobIdToJobProgress
+					.get(jobId).isJobDone);
+			jobStatusResponseBuilder.setTotalMapTasks(mapJobIdToJobProgress
+					.get(jobId).totalMapTasks);
+			jobStatusResponseBuilder
+					.setNumMapTasksStarted(mapJobIdToJobProgress.get(jobId).numMapTasksStarted);
+			jobStatusResponseBuilder.setTotalReduceTasks(mapJobIdToJobProgress
+					.get(jobId).totalReduceTasks);
+			jobStatusResponseBuilder
+					.setNumReduceTasksStarted(mapJobIdToJobProgress.get(jobId).numReduceTasksStarted);
+
+			output = jobStatusResponseBuilder.build().toByteArray();
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		return output;
+	}
+
+	@Override
+	public byte[] heartBeat(byte[] input) throws RemoteException {
+
+		byte[] output = null;
+
+		try {
+			MapReduce.HeartBeatRequest heartBeatRequest = MapReduce.HeartBeatRequest
+					.parseFrom(input);
+
+			System.out.println("TaskTracker HeartBeatRequest recieved...");
+			// Integer taskTrackerId = heartBeatRequest.getTaskTrackerId();
+			Integer mapSlotsFree = heartBeatRequest.getNumMapSlotsFree();
+			Integer reduceSlotsFree = heartBeatRequest.getNumReduceSlotsFree();
+
+			for (MapTaskStatus mapTaskStatus : heartBeatRequest
+					.getMapStatusList()) {
+				// System.out.println("--------------------------------------");
+				boolean isMapTaskCompleted = mapTaskStatus.getTaskCompleted();
+				if (isMapTaskCompleted == true) {
+					int done = updateAndcheckAllMapTasksCompletedForJobId(mapTaskStatus);
+					if (done == 1) {
+						System.out
+								.println("all map task are completed for Job Id:"
+										+ mapTaskStatus.getJobId());
+						// remove from mapper queue and add to reducer
+						// queue
+
+						int jobId = mapTaskStatus.getJobId();
+
+						// already removed while scheduling
+						// mapperQueue.remove(jobId);
+					}
+				}
+			}
+
+			for (ReduceTaskStatus reduceTaskStatus : heartBeatRequest
+					.getReduceStatusList()) {
+				// System.out.println("--------------------------------------");
+				boolean isReduceTaskCompleted = reduceTaskStatus
+						.getTaskCompleted();
+
+				if (isReduceTaskCompleted == true) {
+					int done = updateAndcheckAllReduceTasksCompletedForJobId(reduceTaskStatus);
+					if (done == 1) {
+						System.out
+								.println("all reduce task are completed for Job Id:"
+										+ reduceTaskStatus.getJobId());
+						// remove reducer queue
+						int jobId = reduceTaskStatus.getJobId();
+
+						// already removed while scheduling
+						// reducerQueue.remove(jobId);
+						mapJobIdToJobProgress.get(jobId).isJobDone = true;
+						mapJobIdToJobProgress.get(jobId).status = 1;
+					}
+				}
+			}
+
+			MapReduce.HeartBeatResponse.Builder heartBeatResponseBuilder = HeartBeatResponse
+					.newBuilder();
+
+			ReducerTaskInfo.Builder reducerTaskInfoBuilder = MapReduce.ReducerTaskInfo
+					.newBuilder();
+			MapTaskInfo.Builder mapTaskInfoBuilder = MapTaskInfo.newBuilder();
+
+			int status = 1;
+
+			if (mapSlotsFree > 0) {
+				if (!mapperQueue.isEmpty()) {
+					int jobId = mapperQueue.peek();
+					int firsBlockInQueue = mapJobIdToJobProgress.get(jobId).blocksLeftForMapping
+							.removeFirst();
+					int taskId = ++jTCnf.taskIdCounter;
+					mapTaskInfoBuilder.setJobId(jobId);
+					mapTaskInfoBuilder.setTaskId(taskId);
+					mapTaskInfoBuilder.setMapName(mapJobIdToJobProgress
+							.get(jobId).mapName);
+					mapTaskInfoBuilder
+							.setBlockDatanodeIp(mapJobIdToJobProgress
+									.get(jobId).mapBlockIdToItsIp
+									.get(firsBlockInQueue));
+					mapTaskInfoBuilder
+							.setBlockDatanodePort(mapJobIdToJobProgress
+									.get(jobId).mapBlockIdToItsPort
+									.get(firsBlockInQueue));
+
+					mapTaskInfoBuilder.addInputBlocks(firsBlockInQueue);
+
+					mapJobIdToJobProgress.get(jobId).numMapTasksStarted++;
+
+					mapJobIdToJobProgress.get(jobId).isTaskIdCompleteStatusRecieved
+							.put(taskId, false);
+
+					if (mapJobIdToJobProgress.get(jobId).blocksLeftForMapping
+							.size() == 0) {
+						mapperQueue.remove();
+					}
+				} else {
+					// nothing to fill
+					System.out
+							.println("--------------------MAPPER QUEUE IS EMPTY NOW----------------");
+				}
+			}
+
+			if (reduceSlotsFree > 0) {
+				if (!reducerQueue.isEmpty()) {
+
+					int jobId = reducerQueue.peek();
+					System.out
+							.println("--------------------------------Files Left For Reducing-----------------------");
+					System.out
+							.println(mapJobIdToJobProgress.get(jobId).outputMapFilesLeftForReducing);
+					System.out
+							.println("--------------------------------******************-----------------------");
+
+					int taskId = ++jTCnf.taskIdCounter;
+
+					// do something
+					reducerTaskInfoBuilder.setJobId(jobId);
+					reducerTaskInfoBuilder.setTaskId(taskId);
+					reducerTaskInfoBuilder.setReducerName(mapJobIdToJobProgress
+							.get(jobId).reducerName);
+					int fileCount = mapJobIdToJobProgress.get(jobId).outputMapFilesList
+							.size()
+							/ mapJobIdToJobProgress.get(jobId).totalReduceTasks;
+
+					if (mapJobIdToJobProgress.get(jobId).totalReduceTasks
+							- mapJobIdToJobProgress.get(jobId).numReduceTasksStarted == 1)
+						fileCount = mapJobIdToJobProgress.get(jobId).outputMapFilesList
+								.size();
+
+					// System.out.println("FileCount ============" + fileCount);
+					// if
+					// (mapJobIdToJobProgress.get(jobId).outputMapFilesList
+					// .size() <
+					// mapJobIdToJobProgress.get(jobId).totalReduceTasks)
+					// fileCount =
+					// mapJobIdToJobProgress.get(jobId).outputMapFilesList
+					// .size();
+
+					for (int i = 0; i < fileCount
+							&& mapJobIdToJobProgress.get(jobId).outputMapFilesLeftForReducing
+									.size() > 0; i++) {
+						String mapOutputFile = mapJobIdToJobProgress.get(jobId).outputMapFilesLeftForReducing
+								.remove();
+						reducerTaskInfoBuilder.addMapOutputFiles(mapOutputFile);
+					}
+
+					// *********************************************************************************************
+					// reducerTaskInfoBuilder.setOutputFile();
+
+					mapJobIdToJobProgress.get(jobId).numReduceTasksStarted++;
+
+					mapJobIdToJobProgress.get(jobId).isTaskIdCompleteStatusRecieved
+							.put(taskId, false);
+
+					if (mapJobIdToJobProgress.get(jobId).outputMapFilesLeftForReducing
+							.size() == 0) {
+						reducerQueue.remove();
+					}
+
+				} else {
+					// nothing to fill
+					System.out
+							.println("--------------------REDUCER QUEUE IS EMPTY NOW----------------");
+				}
+			}
+
+			heartBeatResponseBuilder.addMapTasks(mapTaskInfoBuilder.build());
+			heartBeatResponseBuilder.addReduceTasks(reducerTaskInfoBuilder
+					.build());
+			heartBeatResponseBuilder.setStatus(status);
+
+			output = heartBeatResponseBuilder.build().toByteArray();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return output;
+	}
+
+	private int updateAndcheckAllReduceTasksCompletedForJobId(
+			ReduceTaskStatus reduceTaskStatus) {
+		int status = 0;
+		int jobId = reduceTaskStatus.getJobId();
+		int taskId = reduceTaskStatus.getTaskId();
+
+		if (mapJobIdToJobProgress.get(jobId).isTaskIdCompleteStatusRecieved
+				.get(taskId) == false) {
+			mapJobIdToJobProgress.get(jobId).isTaskIdCompleteStatusRecieved
+					.put(taskId, true);
+			mapJobIdToJobProgress.get(jobId).numReduceTasksCompleted++;
+			System.out.println("Reduce Task Completed: " + taskId);
+		}
+
+		if (mapJobIdToJobProgress.get(jobId).numReduceTasksCompleted == mapJobIdToJobProgress
+				.get(jobId).totalReduceTasks) {
+			System.out.println("**********************");
+			System.out.println("totalReduceTasks == numReduceTasksCompleted: "
+					+ mapJobIdToJobProgress.get(jobId).numReduceTasksCompleted);
+			System.out.println("**********************");
+
+			status = 1;
+		}
+
+		return status;
+	}
+
+	private int updateAndcheckAllMapTasksCompletedForJobId(
+			MapTaskStatus mapTaskStatus) {
+
+		int status = 0;
+		int jobId = mapTaskStatus.getJobId();
+		int taskId = mapTaskStatus.getTaskId();
+		String mapOutputFile = mapTaskStatus.getMapOutputFile();
+
+		if (mapJobIdToJobProgress.get(jobId).isTaskIdCompleteStatusRecieved
+				.get(taskId) == false) {
+			mapJobIdToJobProgress.get(jobId).isTaskIdCompleteStatusRecieved
+					.put(taskId, true);
+			mapJobIdToJobProgress.get(jobId).numMapTasksCompleted++;
+			mapJobIdToJobProgress.get(jobId).outputMapFilesList
+					.add(mapOutputFile);
+			System.out.println("Map Task Completed: " + taskId);
+
+			if (mapJobIdToJobProgress.get(jobId).numMapTasksCompleted == mapJobIdToJobProgress
+					.get(jobId).totalMapTasks) {
+				Collections.sort(
+						mapJobIdToJobProgress.get(jobId).outputMapFilesList,
+						new Comp());
+
+				mapJobIdToJobProgress.get(jobId).outputMapFilesLeftForReducing
+						.addAll(mapJobIdToJobProgress.get(jobId).outputMapFilesList);
+				reducerQueue.add(jobId);
+			}
+		}
+
+		if (mapJobIdToJobProgress.get(jobId).numMapTasksCompleted == mapJobIdToJobProgress
+				.get(jobId).totalMapTasks) {
+			status = 1;
+		}
+		return status;
+	}
+
+	private void addNewJobInfo(JobSubmitRequest jobSubmitRequest, int jobId,
+			BlockLocationResponse blockLocationResponse) {
+
+		String mapperName = jobSubmitRequest.getMapName();
+		String reducerName = jobSubmitRequest.getReducerName();
+		String inputFileInHDFS = jobSubmitRequest.getInputFile();
+		String outputFileInHDFS = jobSubmitRequest.getOutputFile();
+		Integer numOfReducers = jobSubmitRequest.getNumReduceTasks();
+
+		JobProgress jobProgress = new JobProgress();
+		jobProgress.status = 2; // 2 means job still going on
+		jobProgress.mapName = mapperName;
+		jobProgress.reducerName = reducerName;
+		jobProgress.inputFile = inputFileInHDFS;
+		jobProgress.outputFile = outputFileInHDFS;
+		jobProgress.isJobDone = false;
+		jobProgress.totalMapTasks = blockLocationResponse
+				.getBlockLocationsList().size();
+		jobProgress.numMapTasksStarted = 0;
+		jobProgress.totalReduceTasks = numOfReducers;
+		jobProgress.numReduceTasksStarted = 0;
+		jobProgress.numMapTasksCompleted = 0;
+		jobProgress.numReduceTasksCompleted = 0;
+		for (BlockLocations blockInfo : blockLocationResponse
+				.getBlockLocationsList()) {
+			jobProgress.blockList.add(blockInfo.getBlockNumber());
+			jobProgress.blocksLeftForMapping.add(blockInfo.getBlockNumber());
+			jobProgress.mapBlockIdToItsIp.put(blockInfo.getBlockNumber(),
+					blockInfo.getLocations(0).getIp());
+			jobProgress.mapBlockIdToItsPort.put(blockInfo.getBlockNumber(),
+					blockInfo.getLocations(0).getPort());
+		}
+
+		if (jobProgress.blockList.size() < jobProgress.totalReduceTasks)
+			jobProgress.totalReduceTasks = jobProgress.blockList.size();
+		mapJobIdToJobProgress.put(jobId, jobProgress);
+
+	}
+}

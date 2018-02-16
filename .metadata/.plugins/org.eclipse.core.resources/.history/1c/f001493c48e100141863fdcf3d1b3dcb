@@ -1,0 +1,100 @@
+package com.hdfs;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.lang.reflect.Method;
+import java.net.URLClassLoader;
+import java.util.LinkedHashMap;
+
+public class MapperThread extends Thread {
+
+	public Thread t;
+	String mapThreadName;
+	Integer taskId;
+	TaskTrackerConfiguration tTCnf;
+	LinkedHashMap<Integer, MapperTaskDetail> mapRunningMapperIdToTaskInfo;
+
+	public MapperThread(String mapThreadNam,
+			LinkedHashMap<Integer, MapperTaskDetail> mapRunningMapperIdToTaskI,
+			TaskTrackerConfiguration taskTrackerConfiguration, Integer taskI) {
+		mapThreadName = mapThreadNam;
+		taskId = taskI;
+		mapRunningMapperIdToTaskInfo = mapRunningMapperIdToTaskI;
+		tTCnf = taskTrackerConfiguration;
+	}
+
+	@Override
+	public void run() {
+		performMapTask();
+	}
+
+	private void performMapTask() {
+		System.out.println("*********Map Task " + taskId
+				+ " Started************");
+
+		HDFSMethods hdfsMethods = new HDFSMethods(tTCnf);
+
+		Integer blockNumber = mapRunningMapperIdToTaskInfo.get(taskId).blockNumberToBeMapped;
+		String dataNodeIP = mapRunningMapperIdToTaskInfo.get(taskId).blockDatanodeIp;
+		Integer dataNodePort = mapRunningMapperIdToTaskInfo.get(taskId).blockDatanodePort;
+		String mapName = mapRunningMapperIdToTaskInfo.get(taskId).mapName;
+
+		String blockData = hdfsMethods.readBlockFromDatanode(blockNumber,
+				dataNodeIP, dataNodePort);
+
+		// *****************************************perform
+		// mapping*************************************************
+		startMapping(blockData);
+
+		String mapOutputFileName = "job_"
+				+ mapRunningMapperIdToTaskInfo.get(taskId).jobId + "_map_"
+				+ taskId;
+
+		System.out.println("write map output file: " + mapOutputFileName);
+
+		try {
+			BufferedWriter bufferedWriter = new BufferedWriter(new FileWriter(
+					new File(tTCnf.mappedFilesLocation + "\\"
+							+ mapOutputFileName)));
+			bufferedWriter.write(blockData);
+			bufferedWriter.close();
+
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+
+		// write file in hdfs
+		hdfsMethods.writeRemoteFile(mapOutputFileName,
+				tTCnf.mappedFilesLocation);
+
+		System.out.println("Block Number To Be Mapped: " + blockNumber);
+		System.out.println("Block Data is-----\n" + blockData + "\n-------");
+
+		synchronized (mapRunningMapperIdToTaskInfo) {
+			mapRunningMapperIdToTaskInfo.get(taskId).taskCompleted = true;
+			mapRunningMapperIdToTaskInfo.get(taskId).mapOutputFile = "job_"
+					+ mapRunningMapperIdToTaskInfo.get(taskId).jobId + "_map_"
+					+ taskId;
+		}
+		synchronized (tTCnf) {
+			tTCnf.freeMapSlots++;
+		}
+
+		System.out.println("*********Map Task " + taskId
+				+ " Done**************");
+	}
+
+	private String startMapping(String blockData) {
+	}
+
+	public void start() {
+		System.out.println("Starting Map Thread:" + mapThreadName);
+
+		if (t == null) {
+			t = new Thread(this, mapThreadName);
+			t.start();
+		}
+	}
+}

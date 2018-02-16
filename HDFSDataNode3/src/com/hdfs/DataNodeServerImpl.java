@@ -1,0 +1,106 @@
+package com.hdfs;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+import java.rmi.Naming;
+import java.rmi.registry.LocateRegistry;
+import java.util.Timer;
+
+public class DataNodeServerImpl {
+
+	public static DataNodeConfiguration dNCnf;
+
+	public static int initialiseVariables(String[] args) {
+		int status = 0;
+		String dataNodeConfigFilePath;
+
+		dataNodeConfigFilePath = args[0];
+		// dataNodeConfigFilePath =
+		// "/home/apratim/workspace/HDFSCore/datanode/dataNodeConfig";
+
+		File file = new File(dataNodeConfigFilePath);
+		if (file.exists()) {
+			try {
+				BufferedReader bufferedReader = new BufferedReader(
+						new FileReader(file));
+
+				String line;
+				dNCnf = new DataNodeConfiguration();
+
+				// dNCnf.dataNodePort = 5002;
+				// dNCnf.dataNodeIP = "localhost";
+				// dNCnf.dataNodeId = 1;
+				// dNCnf.nameNodeIP = "localhost";
+				// dNCnf.nameNodePort = 5001;
+				// dNCnf.dataNodeBlocksDirectory =
+				// "/home/apratim/workspace/HDFSCore/datanode/";
+				// dNCnf.nameNodeReference = "Namenode";
+				// dNCnf.dataNodeReference = "Datanode";
+
+				line = bufferedReader.readLine();
+				dNCnf.dataNodeReference = line.split("=")[1];
+
+				line = bufferedReader.readLine();
+				dNCnf.dataNodePort = Integer.parseInt(line.split("=")[1]);
+
+				line = bufferedReader.readLine();
+				dNCnf.dataNodeIP = line.split("=")[1];
+
+				line = bufferedReader.readLine();
+				dNCnf.dataNodeId = Integer.parseInt(line.split("=")[1]);
+
+				line = bufferedReader.readLine();
+				dNCnf.dataNodeBlocksDirectory = line.split("=")[1];
+
+				line = bufferedReader.readLine();
+				dNCnf.nameNodeIP = line.split("=")[1];
+
+				line = bufferedReader.readLine();
+				dNCnf.nameNodePort = Integer.parseInt(line.split("=")[1]);
+
+				line = bufferedReader.readLine();
+				dNCnf.nameNodeReference = line.split("=")[1];
+
+				line = bufferedReader.readLine();
+				dNCnf.schedulerDelay = Long.parseLong(line.split("=")[1]);
+				status = 1;
+			} catch (Exception e) {
+
+				e.printStackTrace();
+			}
+		}
+		return status;
+	}
+
+	public static void main(String[] args) {
+		try {
+			int status = initialiseVariables(args);
+			if (status == 0) {
+				System.out
+						.println("Datanode Could not launch, Error Reading Configuration File..");
+			} else {
+
+				System.out.println("Datanode starting...");
+
+				IDataNode dataNodeStub = new DataNodeInterfaceImpl(dNCnf);
+
+				LocateRegistry.createRegistry(dNCnf.dataNodePort);
+
+				Naming.rebind("rmi://" + dNCnf.dataNodeIP + ":"
+						+ dNCnf.dataNodePort + "/" + dNCnf.dataNodeReference,
+						dataNodeStub);
+
+				System.out.println("DataNode started");
+
+				System.out.println("Scheduler starting..");
+				RepeatTask repeatTask = new RepeatTask(dNCnf);
+				Timer timer = new Timer();
+				timer.schedule(repeatTask, 0, dNCnf.schedulerDelay);
+				System.out.println("Scheduler started..");
+			}
+		} catch (Exception e) {
+			System.out.println(e);
+		}
+	}
+}

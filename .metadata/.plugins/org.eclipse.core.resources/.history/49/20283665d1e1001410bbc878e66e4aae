@@ -1,0 +1,233 @@
+package com.hdfs;
+
+import java.net.MalformedURLException;
+import java.rmi.Naming;
+import java.rmi.NotBoundException;
+import java.rmi.RemoteException;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.TimerTask;
+
+import com.hdfs.MapReduce.MapTaskInfo;
+import com.hdfs.MapReduce.MapTaskStatus;
+import com.hdfs.MapReduce.ReduceTaskStatus;
+import com.hdfs.MapReduce.ReducerTaskInfo;
+
+public class RepeatTask extends TimerTask {
+
+	TaskTrackerConfiguration tTCnf;
+	INameNode nameNodeStub;
+	IJobTracker jobTracker;
+
+	LinkedHashMap<Integer, MapperTaskDetail> mapRunningMapperIdToTaskInfo = new LinkedHashMap<Integer, MapperTaskDetail>();
+	LinkedHashMap<Integer, ReducerTaskDetail> mapRunningReducerIdToTaskInfo = new LinkedHashMap<Integer, ReducerTaskDetail>();
+
+	MapReduceTaskWithThreadPool mapReduceTaskWithThreadPool;
+
+	public RepeatTask(TaskTrackerConfiguration taskTrackerConfiguration) {
+		tTCnf = taskTrackerConfiguration;
+		MapReduceTaskWithThreadPool pc = new MapReduceTaskWithThreadPool(tTCnf);
+		pc.createThreadPool();
+		mapReduceTaskWithThreadPool = pc;
+	}
+
+	@Override
+	public void run() {
+
+		setNameNodeStub();
+		setJobTrackerStub();
+		taskTrackerHeartBeat();
+
+	}
+
+	private void setJobTrackerStub() {
+		try {
+			jobTracker = (IJobTracker) Naming.lookup("rmi://"
+					+ tTCnf.jobTrackerIp + ":" + tTCnf.jobTrackerPort + "/"
+					+ tTCnf.jobTrackerReference);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	private void setNameNodeStub() {
+
+		try {
+			nameNodeStub = (INameNode) Naming.lookup("rmi://"
+					+ tTCnf.nameNodeIP + ":" + tTCnf.nameNodePort + "/"
+					+ tTCnf.nameNodeReference);
+		} catch (MalformedURLException e) {
+			e.printStackTrace();
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		} catch (NotBoundException e) {
+			e.printStackTrace();
+		}
+	}
+
+	private void taskTrackerHeartBeat() {
+
+		try {
+			MapReduce.HeartBeatRequest.Builder heartBeatRequestBuilder = MapReduce.HeartBeatRequest
+					.newBuilder();
+
+			heartBeatRequestBuilder.setTaskTrackerId(tTCnf.taskTrackerId);
+			heartBeatRequestBuilder.setNumMapSlotsFree(tTCnf.freeMapSlots);
+			heartBeatRequestBuilder
+					.setNumReduceSlotsFree(tTCnf.freeReduceSlots);
+
+			Iterator it = mapRunningMapperIdToTaskInfo.entrySet().iterator();
+			while (it.hasNext()) {
+				Map.Entry pair = (Entry) it.next();
+				Integer taskId = (Integer) pair.getKey();
+				MapperTaskDetail mapTasksProgress = (MapperTaskDetail) pair
+						.getValue();
+
+				MapTaskStatus.Builder mapTaskStatusBuilder = MapTaskStatus
+						.newBuilder();
+
+				mapTaskStatusBuilder.setJobId(mapTasksProgress.jobId);
+				mapTaskStatusBuilder.setTaskId(taskId);
+				mapTaskStatusBuilder
+						.setTaskCompleted(mapTasksProgress.taskCompleted);
+				mapTaskStatusBuilder
+						.setMapOutputFile(mapTasksProgress.mapOutputFile);
+				heartBeatRequestBuilder.addMapStatus(mapTaskStatusBuilder
+						.build());
+			}
+
+			it = mapRunningReducerIdToTaskInfo.entrySet().iterator();
+			while (it.hasNext()) {
+				Map.Entry pair = (Entry) it.next();
+				Integer reducerId = (Integer) pair.getKey();
+				ReducerTaskDetail reduceTasksProgress = (ReducerTaskDetail) pair
+						.getValue();
+
+				ReduceTaskStatus.Builder reduceTaskStatusBuilder = ReduceTaskStatus
+						.newBuilder();
+
+				reduceTaskStatusBuilder.setJobId(reduceTasksProgress.jobId);
+				reduceTaskStatusBuilder.setTaskId(reducerId);
+				reduceTaskStatusBuilder
+						.setTaskCompleted(reduceTasksProgress.taskCompleted);
+				heartBeatRequestBuilder.addReduceStatus(reduceTaskStatusBuilder
+						.build());
+			}
+
+			byte[] returnedMessage = jobTracker
+					.heartBeat(heartBeatRequestBuilder.build().toByteArray());
+			System.out
+					.println("Now TaskTracker Heart Beat Senting request....");
+
+			MapReduce.HeartBeatResponse heartBeatResponse = MapReduce.HeartBeatResponse
+					.parseFrom(returnedMessage);
+			taskTrackerHelper(heartBeatResponse);
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	private void taskTrackerHelper(MapReduce.HeartBeatResponse heartBeatResponse) {
+		System.out.println("Now Response Recieved from JT as Follows...");
+		System.out.println("Map Tasks Retrieved Are as Follows..........: ");
+		for (MapTaskInfo mapTasks : heartBeatResponse.getMapTasksList()) {
+
+			if (mapTasks.getInputBlocksList().size() > 0) {
+				tTCnf.freeMapSlots--;
+
+				List<Integer> blocksList = mapTasks.getInputBlocksList();
+				// actually it will be only one block
+				int blockNumberToBeMapped = blocksList.get(0);
+				String mapName = mapTasks.getMapName();
+				Integer taskId = mapTasks.getTaskId();
+				Integer jobId = mapTasks.getJobId();
+				Integer blockDatanodePort = mapTasks.getBlockDatanodePort();
+				String blockDatanodeIp = mapTasks.getBlockDatanodeIp();
+
+				MapperTaskDetail mapperTaskDetail = new MapperTaskDetail();
+				mapperTaskDetail.mapName = mapName;
+				mapperTaskDetail.blockNumberToBeMapped = blockNumberToBeMapped;
+				mapperTaskDetail.jobId = jobId;
+				mapperTaskDetail.taskCompleted = false;
+				mapperTaskDetail.blockDatanodeIp = blockDatanodeIp;
+				mapperTaskDetail.blockDatanodePort = blockDatanodePort;
+				mapRunningMapperIdToTaskInfo.put(taskId, mapperTaskDetail);
+				scheduleTaskToMapperThread(taskId);
+
+				System.out
+						.println("Blocks To Be Sent to Mapper: " + blocksList);
+				System.out.println("Block Datanode IP: " + blockDatanodeIp);
+				System.out.println("Block Datanode Port: " + blockDatanodePort);
+				System.out.println("Map Name: " + mapName);
+				System.out.println("taskId :" + taskId);
+				System.out.println("jobId : " + jobId);
+			}
+		}
+
+		System.out.println("Reduce Tasks Retrieved Are as Follows.........: ");
+		for (ReducerTaskInfo reduceTasks : heartBeatResponse
+				.getReduceTasksList()) {
+
+			if (reduceTasks.getMapOutputFilesList().size() > 0) {
+				tTCnf.freeReduceSlots--;
+				String outputFile = reduceTasks.getOutputFile();
+				List<String> mapOutputFilesList = reduceTasks
+						.getMapOutputFilesList();
+
+				String reducerName = reduceTasks.getReducerName();
+				Integer reducerId = reduceTasks.getTaskId();
+				Integer jobId = reduceTasks.getJobId();
+
+				ReducerTaskDetail reducerTaskDetail = new ReducerTaskDetail();
+				reducerTaskDetail.jobId = jobId;
+				reducerTaskDetail.reducerName = reducerName;
+				reducerTaskDetail.outputFile = outputFile;
+				reducerTaskDetail.mapOutputFilesToBeReduced
+						.addAll(mapOutputFilesList);
+
+				reducerTaskDetail.jobId = jobId;
+				reducerTaskDetail.taskCompleted = false;
+				mapRunningReducerIdToTaskInfo.put(reducerId, reducerTaskDetail);
+				scheduleTaskToReducerThread(reducerId);
+
+				System.out.println("MapOutputFiles To Be Sent to Reducer: "
+						+ mapOutputFilesList);
+				System.out.println("Reducer Name: " + reducerName);
+				System.out.println("Reducer :" + reducerId);
+				System.out.println("jobId : " + jobId);
+			}
+		}
+	}
+
+	private void scheduleTaskToReducerThread(Integer reducerId) {
+
+		// System.out.println("Task Done with reducer task id: " + reducerId);
+		// mapRunningReducerIdToTaskInfo.get(reducerId).taskCompleted = true;
+
+		// ReducerThread reducerThread = new ReducerThread("r",
+		// mapRunningReducerIdToTaskInfo, tTCnf, reducerId);
+		// reducerThread.start();
+
+		mapReduceTaskWithThreadPool.submitReduceTask(reducerId);
+
+	}
+
+	private void scheduleTaskToMapperThread(Integer taskId) {
+
+		// System.out.println("Task Done with map task id: " + taskId);
+		// mapRunningMapperIdToTaskInfo.get(taskId).taskCompleted = true;
+		// mapRunningMapperIdToTaskInfo.get(taskId).mapOutputFile = "job_"
+		// + mapRunningMapperIdToTaskInfo.get(taskId).jobId + "_map_"
+		// + taskId;
+
+		// MapperThread mapperThread = new MapperThread("m" + taskId,
+		// mapRunningMapperIdToTaskInfo, tTCnf, taskId);
+		// mapperThread.start();
+
+		mapReduceTaskWithThreadPool.submitMapTask(taskId);
+	}
+}

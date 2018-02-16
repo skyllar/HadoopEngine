@@ -1,0 +1,53 @@
+package com.hdfs;
+
+import java.io.PrintStream;
+import java.rmi.Naming;
+
+import com.google.protobuf.ByteString;
+import com.hdfs.HDFS.ReadBlockRequest;
+import com.hdfs.HDFS.ReadBlockResponse;
+
+public class HDFSMethods {
+	public TaskTrackerConfiguration tTCnf;
+	
+	public HDFSMethods(TaskTrackerConfiguration t)
+	{
+		tTCnf = t;
+	}
+	
+	public String readBlockFromDatanode(Integer blockNumber,String dataNodeIP,Integer dataNodePort )
+	{
+
+		ReadBlockRequest.Builder readBlockRequestBuilder = ReadBlockRequest
+				.newBuilder();
+		
+
+		readBlockRequestBuilder.setBlockNumber(blockNumber);
+
+		IDataNode dataNodeStub = (IDataNode) Naming
+				.lookup("rmi://" + dataNodeIP + ":"
+						+ dataNodePort + "/"
+						+ tTCnf.dataNodeReference);
+
+		byte [] returnedMessage = dataNodeStub
+				.readBlock(readBlockRequestBuilder.build()
+						.toByteArray());
+
+		ReadBlockResponse readBlockResponse = ReadBlockResponse
+				.parseFrom(returnedMessage);
+
+		int status = readBlockResponse.getStatus();
+
+		if (status == 0) {
+			System.out.println("Error in reading block data "
+					+ blockNumber);
+		} else {
+			for (ByteString byteString : readBlockResponse
+					.getDataList()) {
+				PrintStream fileData;
+				fileData.append(byteString.toStringUtf8());
+			}
+		}
+	}
+	}
+}

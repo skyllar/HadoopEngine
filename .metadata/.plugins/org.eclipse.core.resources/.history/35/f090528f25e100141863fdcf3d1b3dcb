@@ -1,0 +1,60 @@
+package com.hdfs;
+
+import java.io.PrintStream;
+import java.net.MalformedURLException;
+import java.rmi.Naming;
+import java.rmi.NotBoundException;
+import java.rmi.RemoteException;
+
+import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.hdfs.HDFS.ReadBlockRequest;
+import com.hdfs.HDFS.ReadBlockResponse;
+
+public class HDFSMethods {
+	public TaskTrackerConfiguration tTCnf;
+
+	public HDFSMethods(TaskTrackerConfiguration t) {
+		tTCnf = t;
+	}
+
+	public String readBlockFromDatanode(Integer blockNumber, String dataNodeIP,
+			Integer dataNodePort) {
+		String output = null;
+
+		try {
+			ReadBlockRequest.Builder readBlockRequestBuilder = ReadBlockRequest
+					.newBuilder();
+			StringBuilder fileData = new StringBuilder();
+
+			readBlockRequestBuilder.setBlockNumber(blockNumber);
+
+			IDataNode dataNodeStub = (IDataNode) Naming.lookup("rmi://"
+					+ dataNodeIP + ":" + dataNodePort + "/"
+					+ tTCnf.dataNodeReference);
+
+			byte[] returnedMessage = dataNodeStub
+					.readBlock(readBlockRequestBuilder.build().toByteArray());
+
+			ReadBlockResponse readBlockResponse = ReadBlockResponse
+					.parseFrom(returnedMessage);
+
+			int status = readBlockResponse.getStatus();
+
+			if (status == 0) {
+				System.out.println("Error in reading Block Number "
+						+ blockNumber);
+			} else {
+				for (ByteString byteString : readBlockResponse.getDataList()) {
+					fileData.append(byteString.toStringUtf8());
+				}
+				//System.out.println("Block Data is-----\n" + fileData
+					//	+ "\n-------");
+				output = fileData.toString();
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return output;
+	}
+}

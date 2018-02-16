@@ -1,0 +1,409 @@
+package com.hdfs;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.rmi.Naming;
+import java.sql.Time;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Timer;
+
+import com.google.protobuf.ByteString;
+import com.hdfs.HDFS.AssignBlockRequest;
+import com.hdfs.HDFS.AssignBlockResponse;
+import com.hdfs.HDFS.BlockLocationRequest;
+import com.hdfs.HDFS.BlockLocationResponse;
+import com.hdfs.HDFS.BlockLocations;
+import com.hdfs.HDFS.CloseFileRequest;
+import com.hdfs.HDFS.CloseFileResponse;
+import com.hdfs.HDFS.DataNodeLocation;
+import com.hdfs.HDFS.OpenFileRequest;
+import com.hdfs.HDFS.OpenFileResponse;
+import com.hdfs.HDFS.ReadBlockRequest;
+import com.hdfs.HDFS.ReadBlockResponse;
+import com.hdfs.HDFS.WriteBlockRequest;
+import com.hdfs.HDFS.WriteBlockResponse;
+import com.hdfs.MapReduce;
+import com.hdfs.MapReduce.JobStatusResponse;
+import com.hdfs.MapReduce.JobSubmitRequest;
+import com.hdfs.MapReduce.JobSubmitResponse;
+
+public class ClientMethods {
+
+	static ClientConfiguration clientConf;
+
+	public ClientMethods(ClientConfiguration clientCon) {
+		clientConf = clientCon;
+	}
+
+	public int submitMapReduceTask(String args[]) {
+		int jobId = -1;
+		JobSubmitResponse jobSubmitResponse = submitTaskToJobTracker(args);
+		if (jobSubmitResponse == null) {
+			System.out.println("Could Not Submit Job To JobTracker.");
+			return jobId;
+		} else {
+			int status = jobSubmitResponse.getStatus();
+
+			if (status == 0) {
+				System.out.println("Could Not Submit Job To JobTracker.");
+				return jobId;
+			} else {
+				jobId = jobSubmitResponse.getJobId();
+				System.out.println("JobId Assigned: " + jobId);
+				// verifyTaskCompletion(jobId);
+				Timer timer = null;
+				RepeatTask repeatTask = new RepeatTask(timer, clientConf, jobId);
+				timer = new Timer();
+				timer.schedule(repeatTask, clientConf.jobStatusTimerDelay);
+
+				// if (verifyTaskCompletion(jobId) == true) {
+				// System.out
+				// .println("MapReduce Task Completed Successfully.");
+				// } else {
+				// System.out.println("MapReduce Task Failed to Complete.");
+				// }
+
+			}
+		}
+		return jobId;
+	}
+
+	private boolean verifyTaskCompletion(Integer jobId) {
+		Timer timer = new Timer();
+		RepeatTask repeatTask = new RepeatTask(timer, clientConf, jobId);
+		timer.schedule(repeatTask, clientConf.jobStatusTimerDelay);
+		// int status = repeatTask.globalStatus;
+		// if (status == 0) {
+		// // System.out.println("Task fails to complete.");
+		// return false;
+		// } else if (status == 1) {
+		// // System.out.println("Task Completed.");
+		// return true;
+		// }
+		return false;
+	}
+
+	private JobSubmitResponse submitTaskToJobTracker(String args[]) {
+
+		try {
+			String mapperName = args[0];
+			String reducerName = args[1];
+			String inputFileInHDFS = args[2];
+			String outputFileInHDFS = args[3];
+			Integer numOfReducers = Integer.parseInt(args[4]);
+
+			JobSubmitRequest.Builder jobSubmitRequestBuilder = JobSubmitRequest
+					.newBuilder();
+
+			jobSubmitRequestBuilder.setMapName(mapperName);
+			jobSubmitRequestBuilder.setReducerName(reducerName);
+			jobSubmitRequestBuilder.setInputFile(inputFileInHDFS);
+			jobSubmitRequestBuilder.setOutputFile(outputFileInHDFS);
+			jobSubmitRequestBuilder.setNumReduceTasks(numOfReducers);
+
+			IJobTracker jobTracker = (IJobTracker) Naming.lookup("rmi://"
+					+ clientConf.jobTrackerIP + ":" + clientConf.jobTrackerPort
+					+ "/" + clientConf.jobTrackerRefernce);
+
+			byte[] returnedMessage = jobTracker
+					.jobSubmit(jobSubmitRequestBuilder.build().toByteArray());
+			JobSubmitResponse jobSubmitResponse = JobSubmitResponse
+					.parseFrom(returnedMessage);
+			return jobSubmitResponse;
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return null;
+	}
+
+	public void readRemoteFile(String fileName) {
+
+		try {
+			OpenFileRequest.Builder openFileRequestBuilder = OpenFileRequest
+					.newBuilder();
+
+			// setting request message parameters
+			openFileRequestBuilder.setFileName(fileName);
+			openFileRequestBuilder.setForRead(true);
+
+			System.out.println("Calling Namenode openFile method");
+			// calling remote open file request and retrieving response
+			byte[] returnedMessage = clientConf.nameNodeStub
+					.openFile(openFileRequestBuilder.build().toByteArray());
+
+			// parsing response from namenode
+			OpenFileResponse openFileResponse = OpenFileResponse
+					.parseFrom(returnedMessage);
+
+			int status = openFileResponse.getStatus();
+
+			// 0 for failure, 1 for success
+			if (status == 0) {
+				System.out.println("File Not Found...");
+			} else {
+				int fileHandle = openFileResponse.getHandle();
+
+				BlockLocationRequest.Builder blockLocationRequestBuilder = BlockLocationRequest
+						.newBuilder();
+				blockLocationRequestBuilder.addAllBlockNums(openFileResponse
+						.getBlockNumsList());
+				returnedMessage = clientConf.nameNodeStub
+						.getBlockLocations(blockLocationRequestBuilder.build()
+								.toByteArray());
+				BlockLocationResponse blockLocationResponse = BlockLocationResponse
+						.parseFrom(returnedMessage);
+				System.out.println("Block Locations Recieved From Namenode"
+						+ blockLocationResponse.getBlockLocationsList());
+
+				status = blockLocationResponse.getStatus();
+
+				if (status == 0) {
+					System.out.println("Error in retrieving blocks location..");
+				} else {
+
+					StringBuilder fileData = new StringBuilder();
+
+					for (int i = 0; i < blockLocationResponse
+							.getBlockLocationsCount(); i++) {
+
+						int blockNumber = blockLocationResponse
+								.getBlockLocations(i).getBlockNumber();
+						// System.out.println("Now Reading Block Number:"
+						// + blockNumber);
+
+						List<DataNodeLocation> dataNodeLocations = blockLocationResponse
+								.getBlockLocations(i).getLocationsList();
+
+						String dataNodeIP = dataNodeLocations.get(0).getIp();
+
+						Integer dataNodePort = dataNodeLocations.get(0)
+								.getPort();
+
+						ReadBlockRequest.Builder readBlockRequestBuilder = ReadBlockRequest
+								.newBuilder();
+
+						readBlockRequestBuilder.setBlockNumber(blockNumber);
+
+						IDataNode dataNodeStub = (IDataNode) Naming
+								.lookup("rmi://" + dataNodeIP + ":"
+										+ dataNodePort + "/"
+										+ clientConf.dataNodeRefernce);
+
+						returnedMessage = dataNodeStub
+								.readBlock(readBlockRequestBuilder.build()
+										.toByteArray());
+
+						ReadBlockResponse readBlockResponse = ReadBlockResponse
+								.parseFrom(returnedMessage);
+
+						status = readBlockResponse.getStatus();
+
+						if (status == 0) {
+							System.out.println("Error in reading block data "
+									+ blockNumber);
+						} else {
+							for (ByteString byteString : readBlockResponse
+									.getDataList()) {
+								fileData.append(byteString.toStringUtf8());
+							}
+						}
+					}
+
+					System.out.println("**********File Start********");
+					System.out.println(fileData);
+					System.out.println("**********File End**********");
+				}
+
+				CloseFileRequest.Builder closeFileRequestBuilder = HDFS.CloseFileRequest
+						.newBuilder();
+
+				closeFileRequestBuilder.setHandle(fileHandle);
+
+				returnedMessage = clientConf.nameNodeStub
+						.closeFile(closeFileRequestBuilder.build()
+								.toByteArray());
+
+				CloseFileResponse closeFileResponse = CloseFileResponse
+						.parseFrom(returnedMessage);
+
+				status = closeFileResponse.getStatus();
+
+				if (status == 0) {
+					System.out.println("Error in Closing File..");
+				}
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	public void writeRemoteFile(String fileName) {
+
+		try {
+			OpenFileRequest.Builder openFileRequestBuilder = HDFS.OpenFileRequest
+					.newBuilder();
+
+			// setting request message parameters
+			openFileRequestBuilder.setFileName(fileName);
+			openFileRequestBuilder.setForRead(false);
+
+			System.out.println("Calling Namenode openFile method");
+			// calling remote open file request and retrieving response
+			byte[] returnedMessage = clientConf.nameNodeStub
+					.openFile(openFileRequestBuilder.build().toByteArray());
+
+			System.out.println("Calling openFile request");
+			// parsing response from namenode
+			OpenFileResponse openFileResponse = OpenFileResponse
+					.parseFrom(returnedMessage);
+
+			int status = openFileResponse.getStatus();
+
+			// 0 for failure, 1 for success
+			if (status == 0) {
+				System.out.println("Unable to open file for writing...");
+			} else {
+
+				int fileHandle = openFileResponse.getHandle();
+				File file = new File(clientConf.fileLocationToWriteFrom + "/"
+						+ fileName);
+				if (file.exists()) {
+
+					ArrayList<ByteString> byteStringArray = addDataForWritingToBlock(file);
+
+					for (int i = 0; i < byteStringArray.size(); i++) {
+						System.out.println("In Loopp.....");
+						AssignBlockRequest.Builder assignBlockRequestBuilder = AssignBlockRequest
+								.newBuilder();
+						assignBlockRequestBuilder.setHandle(fileHandle);
+
+						System.out.println("Calling assign block request...");
+						returnedMessage = clientConf.nameNodeStub
+								.assignBlock(assignBlockRequestBuilder.build()
+										.toByteArray());
+						AssignBlockResponse assignResponse = AssignBlockResponse
+								.parseFrom(returnedMessage);
+
+						status = assignResponse.getStatus();
+
+						if (status == 0) {
+							System.out
+									.println("Error in assigning Block Request..");
+						} else {
+
+							System.out
+									.println("Calling  blocklocations request...");
+							BlockLocations blockLocations = assignResponse
+									.getNewBlock();
+							// System.out.println("&&&&&&" + blockLocations
+							// + "*****");
+
+							Integer newBlockNumber = blockLocations
+									.getBlockNumber();
+							System.out.println("Next Block Allocated::"
+									+ newBlockNumber);
+
+							List<DataNodeLocation> dataNodeLocations = blockLocations
+									.getLocationsList();
+							DataNodeLocation dataNodeLocation = dataNodeLocations
+									.get(0);
+
+							List<DataNodeLocation> newDataNodeLocations = dataNodeLocations
+									.subList(1, dataNodeLocations.size());
+
+							WriteBlockRequest.Builder writeBlockRequestBuilder = WriteBlockRequest
+									.newBuilder();
+							BlockLocations.Builder newBlockLocationBuilder = BlockLocations
+									.newBuilder();
+							newBlockLocationBuilder
+									.setBlockNumber(newBlockNumber);
+
+							newBlockLocationBuilder
+									.addAllLocations(newDataNodeLocations);
+							writeBlockRequestBuilder
+									.setBlockInfo(newBlockLocationBuilder);
+
+							writeBlockRequestBuilder.addData(byteStringArray
+									.get(i));
+
+							IDataNode dataNodeStub = (IDataNode) Naming
+									.lookup("rmi://" + dataNodeLocation.getIp()
+											+ ":" + dataNodeLocation.getPort()
+											+ "/" + clientConf.dataNodeRefernce);
+
+							// System.out.println("********"
+							// + writeBlockRequestBuilder.getBlockInfo()
+							// .getLocationsList()
+							// + "*************");
+							System.out.println("WriteBlock Requested.... ");
+							returnedMessage = dataNodeStub
+									.writeBlock(writeBlockRequestBuilder
+											.build().toByteArray());
+							WriteBlockResponse writeBlockResponse = WriteBlockResponse
+									.parseFrom(returnedMessage);
+							status = writeBlockResponse.getStatus();
+
+							if (status == 0)
+								System.out
+										.println("Failed To WriteBlock At Datanode...");
+							else
+								System.out
+										.println("Success in Writing Block At Datanode...");
+						}
+					}
+					CloseFileRequest.Builder closeFileRequestBuiler = CloseFileRequest
+							.newBuilder();
+					closeFileRequestBuiler.setHandle(fileHandle);
+					returnedMessage = clientConf.nameNodeStub
+							.closeFile(closeFileRequestBuiler.build()
+									.toByteArray());
+					CloseFileResponse closeFileResponse = CloseFileResponse
+							.parseFrom(returnedMessage);
+					status = closeFileResponse.getStatus();
+					if (status == 0) {
+						System.out.println("Unable To Close File ");
+					}
+
+				} else {
+					System.out.println("File Does Not Exist...");
+				}
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	private ArrayList<ByteString> addDataForWritingToBlock(File file) {
+
+		ArrayList<ByteString> byteStringArray = new ArrayList<ByteString>();
+
+		byte[] byteArray;
+		try {
+			byteArray = Files.readAllBytes(file.toPath());
+
+			ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+
+			for (int i = 0; i < byteArray.length; i++) {
+				byteArrayOutputStream.write(byteArray[i]);
+
+				if (byteArrayOutputStream.size() == clientConf.blockSize) {
+					byteStringArray.add(ByteString
+							.copyFrom(byteArrayOutputStream.toByteArray()));
+					byteArrayOutputStream.reset();
+				}
+			}
+			if (byteArrayOutputStream.size() != 0) {
+				byteStringArray.add(ByteString.copyFrom(byteArrayOutputStream
+						.toByteArray()));
+			}
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+
+		return byteStringArray;
+	}
+}

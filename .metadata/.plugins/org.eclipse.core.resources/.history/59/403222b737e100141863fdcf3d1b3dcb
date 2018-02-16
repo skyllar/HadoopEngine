@@ -1,0 +1,33 @@
+package com.hdfs;
+
+public class JobTrackerConfiguration {
+	public String remoteReference;
+	public Integer nameNodePort;
+	public String nameNodeIP;
+
+	// file handle counter
+	public int fileDescriptor;
+	public int replicationFactor;
+	public int blockNumber;
+
+	// in milliseconds
+	public long thresholdTime;
+	public String fileToBlocksRegistryDir;
+	public String fileToBlocksRegistryFileName;
+	public String fileToBlocksRegistryDelimiter;
+	public String lastBlockNumberFile;
+	public String jobTrackerIP;
+	public Integer jobTrackerPort;
+	public String jobTrackerReference;
+
+	public Integer jobIdCounter;
+
+	public Integer taskIdCounter;
+
+	public String dataNodeRefernce;
+
+	public HDFSMethods hdfsMethods;
+	public String nameNodeRefernce;
+
+	public String lastJobNumberFile;
+}

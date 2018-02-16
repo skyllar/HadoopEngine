@@ -1,0 +1,17 @@
+dataNodeReference=Datanode
+dataNodePort=5001
+dataNodeIP=localhost
+dataNodeId=1
+dataNodeBlocksDirectory=./datanode/
+nameNodeIP=localhost
+nameNodePort=5000
+nameNodeReference=Namenode
+schedulerDelay=4000
+jobTrackerIp=localhost
+jobTrackerPort=6000
+jobTrackerReference=Jobtracker
+taskTrackerId=1
+taskTrackerPort=6001
+totalMapSlots=10
+totalReduceSlots=10
+blockSize=8

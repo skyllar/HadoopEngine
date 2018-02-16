@@ -1,0 +1,80 @@
+package com.hdfs;
+
+import java.rmi.Naming;
+import java.util.Timer;
+import java.util.TimerTask;
+
+import com.hdfs.MapReduce.JobStatusRequest;
+import com.hdfs.MapReduce.JobStatusResponse;
+
+public class RepeatTask extends TimerTask {
+
+	Integer globalStatus = -1;
+	Timer timer;
+	IJobTracker jobTracker;
+	ClientConfiguration clientConf;
+	Integer jobId;
+
+	public RepeatTask(Timer t, ClientConfiguration clientConfiguration,
+			Integer jId) {
+		timer = t;
+		clientConf = clientConfiguration;
+		jobId = jId;
+	}
+
+	@Override
+	public void run() {
+		setJobTrackerStub();
+		getJobStatus();
+	}
+
+	private void setJobTrackerStub() {
+		try {
+			jobTracker = (IJobTracker) Naming.lookup("rmi://"
+					+ clientConf.jobTrackerIP + ":" + clientConf.jobTrackerPort
+					+ "/" + clientConf.jobTrackerRefernce);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	private int getJobStatus() {
+		int status = 0;
+		JobStatusRequest.Builder jobStatusRequestBuilder = JobStatusRequest
+				.newBuilder();
+		jobStatusRequestBuilder.setJobId(jobId);
+		try {
+			byte[] returnedMessage = jobTracker
+					.getJobStatus(jobStatusRequestBuilder.build().toByteArray());
+			JobStatusResponse jobStatusResponse = JobStatusResponse
+					.parseFrom(returnedMessage);
+			status = jobStatusResponse.getStatus();
+			globalStatus = status;
+			boolean jobDone = jobStatusResponse.getJobDone();
+			int totalMapTasks = jobStatusResponse.getTotalMapTasks();
+			int numMapTasksStarted = jobStatusResponse.getNumMapTasksStarted();
+			int totalReduceTasks = jobStatusResponse.getTotalReduceTasks();
+			int numReduceTasksStarted = jobStatusResponse
+					.getNumReduceTasksStarted();
+			System.out.println("Response of Status Query-----:----");
+			System.out.println("jobDone: " + jobId);
+			System.out.println("totalMapTasks: " + totalMapTasks);
+			System.out.println("numMapTasksStarted: " + numMapTasksStarted);
+			System.out.println("totalReduceTasks: " + totalReduceTasks);
+			System.out.println("numReduceTasksStarted: " + numReduceTasksStarted);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		if (status == 0) {
+			System.out.println("Task failed to complete.");
+			timer.cancel();
+		} else if (status == 1) {
+			System.out.println("Task Completed.");
+			timer.cancel();
+		} else {
+			System.out.println("Task still going on..");
+		}
+		return 0;
+	}
+}

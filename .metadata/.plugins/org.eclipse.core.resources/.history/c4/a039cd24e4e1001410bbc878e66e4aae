@@ -1,0 +1,159 @@
+package com.hdfs;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+
+public class MapReduceTaskWithThreadPool {
+
+	TaskTrackerConfiguration tTCnf;
+
+	ThreadPool mapperPool;
+	ThreadPool reducerPool;
+
+	LinkedHashMap<Integer, MapperTaskDetail> mapRunningMapperIdToTaskInfo;
+	LinkedHashMap<Integer, ReducerTaskDetail> mapRunningReducerIdToTaskInfo;
+
+	public MapReduceTaskWithThreadPool(
+			TaskTrackerConfiguration tTCnf,
+			LinkedHashMap<Integer, MapperTaskDetail> mapRunningMapperIdToTaskInfo,
+			LinkedHashMap<Integer, ReducerTaskDetail> mapRunningReducerIdToTaskInfo) {
+		this.mapRunningMapperIdToTaskInfo = mapRunningMapperIdToTaskInfo;
+		this.mapRunningReducerIdToTaskInfo = mapRunningReducerIdToTaskInfo;
+		this.tTCnf = tTCnf;
+	}
+
+	public void submitMapTask(int taskId) {
+		mapperPool.addTask(new MapTask());
+
+	}
+
+	public void submitReduceTask(int taskId) {
+		reducerPool.addTask(new ReduceTask());
+	}
+
+	public void createMapperThreadPool(int threadCount) {
+		ThreadPool mapperPool = new ThreadPool(threadCount);
+		this.mapperPool = mapperPool;
+	}
+
+	public void createReducerThreadPool(int threadCount) {
+		ThreadPool reducerPool = new ThreadPool(threadCount);
+		this.reducerPool = reducerPool;
+	}
+
+	public void shutDownPool() {
+		mapperPool.shutdown();
+		reducerPool.shutdown();
+	}
+
+	private class MapTask implements Runnable {
+		int taskId;
+
+		public MapTask(int taskId) {
+			// TODO Auto-generated constructor stub
+		}
+
+		@Override
+		public void run() {
+			try {
+				// System.out.println("Removing Element " + queue.take());
+				// Thread.sleep(1000);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}
+	}
+
+	private class ReduceTask implements Runnable {
+		
+		int taskId;
+		@Override
+		public void run() {
+			try {
+				performReduceTask();
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}
+
+		private void performReduceTask() {
+			System.out.println("*********Reduce Task " + taskId
+					+ " Started************");
+			HDFSMethods hdfsMethods = new HDFSMethods(tTCnf);
+
+			Integer jobId = mapRunningReducerIdToTaskInfo.get(taskId).jobId;
+			ArrayList<String> mapOutputFilesToBeReduced = mapRunningReducerIdToTaskInfo
+					.get(taskId).mapOutputFilesToBeReduced;
+			String outputFileName = mapRunningReducerIdToTaskInfo.get(taskId).outputFile;
+			String reducerName = mapRunningReducerIdToTaskInfo.get(taskId).reducerName;
+
+			String reducerOutputFileName = outputFileName + "_" + jobId + "_"
+					+ taskId;
+
+			try {
+				BufferedWriter bufferedWriter = new BufferedWriter(
+						new FileWriter(tTCnf.reducedFilesLocation + "\\"
+								+ reducerOutputFileName, true));
+				for (String fileToBeReduced : mapOutputFilesToBeReduced) {
+					String fileContent = hdfsMethods
+							.readRemoteFile(fileToBeReduced);
+					String reducedOutputContent = startReduceTask(reducerName,
+							fileContent);
+					bufferedWriter.write(reducedOutputContent + "\n");
+				}
+				bufferedWriter.close();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+
+			// write file in hdfs
+			hdfsMethods.writeRemoteFile(reducerOutputFileName,
+					tTCnf.reducedFilesLocation);
+
+			System.out.println("Reducer Output File Name: " + outputFileName);
+
+			synchronized (mapRunningReducerIdToTaskInfo) {
+				mapRunningReducerIdToTaskInfo.get(taskId).taskCompleted = true;
+			}
+			synchronized (tTCnf) {
+				tTCnf.freeReduceSlots++;
+			}
+
+			System.out.println("*********Reduce Task " + taskId
+					+ " Done**************");
+		}
+
+		private String startReduceTask(String reducerName, String inputContent) {
+			String outputFileContent = null;
+			File jarDir = new File(tTCnf.jarFilesPath);
+			String className = reducerName;
+
+			for (File jarFile : jarDir.listFiles()) {
+				try {
+					URL fileURL = jarFile.toURI().toURL();
+					String jarURL = "jar:" + fileURL + "!/";
+					URL urls[] = { new URL(jarURL) };
+					URLClassLoader ucl = new URLClassLoader(urls);
+					Class cls = Class.forName(className, true, ucl);
+					Object obj = cls.newInstance();
+					Class params[] = new Class[1];
+					params[0] = String.class;
+					Method m = cls.getDeclaredMethod("reduce", params);
+					outputFileContent = (String) m.invoke(obj, inputContent);
+					break;
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+			}
+			return outputFileContent;
+		}
+	}
+
+}

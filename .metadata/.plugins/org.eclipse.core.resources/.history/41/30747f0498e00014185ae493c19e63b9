@@ -1,0 +1,7 @@
+package com.hdfs;
+
+public class ReducerTaskDetail {
+	int jobId;
+	// int reducerId;
+	boolean taskCompleted;
+}

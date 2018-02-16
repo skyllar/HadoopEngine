@@ -1,0 +1,18 @@
+package com.hdfs;
+
+public class NameNodeConfiguration {
+	public String remoteReference;
+	public Integer nameNodePort;
+	public String nameNodeIP;
+	// file handle counter
+	public int fileDescriptor;
+	public int replicationFactor;
+	public int blockNumber;
+	// in milliseconds
+	public long thresholdTime;
+	public String fileToBlocksRegistryDir;
+	public String fileToBlocksRegistryFileName;
+	public String fileToBlocksRegistryDelimiter;
+	public String lastBlockNumberFile;
+
+}

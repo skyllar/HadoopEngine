@@ -1,0 +1,10 @@
+package com.mapper;
+
+public class MapTask implements IMapper{
+
+	@Override
+	public String map(String input) {
+		return null;
+	}
+
+}

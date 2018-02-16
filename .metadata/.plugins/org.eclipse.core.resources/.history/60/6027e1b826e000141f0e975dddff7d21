@@ -1,0 +1,6 @@
+package com.hdfs;
+
+import java.util.HashMap;
+
+public class JobIdProgress {
+	}

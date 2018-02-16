@@ -1,0 +1,129 @@
+package com.hdfs;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.rmi.Naming;
+import java.util.ArrayList;
+import java.util.List;
+
+import com.google.protobuf.ByteString;
+import com.hdfs.HDFS.AssignBlockRequest;
+import com.hdfs.HDFS.AssignBlockResponse;
+import com.hdfs.HDFS.BlockLocationRequest;
+import com.hdfs.HDFS.BlockLocationResponse;
+import com.hdfs.HDFS.BlockLocations;
+import com.hdfs.HDFS.CloseFileRequest;
+import com.hdfs.HDFS.CloseFileResponse;
+import com.hdfs.HDFS.DataNodeLocation;
+import com.hdfs.HDFS.OpenFileRequest;
+import com.hdfs.HDFS.OpenFileResponse;
+import com.hdfs.HDFS.ReadBlockRequest;
+import com.hdfs.HDFS.ReadBlockResponse;
+import com.hdfs.HDFS.WriteBlockRequest;
+import com.hdfs.HDFS.WriteBlockResponse;
+
+public class NameNodeMethods {
+
+	static JobTrackerConfiguration jTCnf;
+
+	public NameNodeMethods(JobTrackerConfiguration jobTrackerCon) {
+		jTCnf = jobTrackerCon;
+	}
+
+	public BlockLocationResponse openFileInHDFSandGetBlockLoctions(
+			String fileName) {
+
+		try {
+			OpenFileRequest.Builder openFileRequestBuilder = HDFS.OpenFileRequest
+					.newBuilder();
+
+			// setting request message parameters
+			openFileRequestBuilder.setFileName(fileName);
+			openFileRequestBuilder.setForRead(true);
+
+			System.out.println("Calling Namenode openFile method");
+			// calling remote open file request and retrieving response
+			INameNode nameNodeSkelton = (INameNode) Naming.lookup("rmi://"
+					+ jTCnf.nameNodeIP + ":" + jTCnf.nameNodePort + "/"
+					+ jTCnf.nameNodeRefernce);
+			byte[] returnedMessage = nameNodeSkelton
+					.openFile(openFileRequestBuilder.build().toByteArray());
+
+			// parsing response from namenode
+			OpenFileResponse openFileResponse = OpenFileResponse
+					.parseFrom(returnedMessage);
+
+			int status = openFileResponse.getStatus();
+
+			// 0 for failure, 1 for success
+			if (status == 0) {
+				System.out.println("File Not Found...");
+				return null;
+			} else {
+				int fileHandle = openFileResponse.getHandle();
+
+				BlockLocationRequest.Builder blockLocationRequestBuilder = BlockLocationRequest
+						.newBuilder();
+				blockLocationRequestBuilder.addAllBlockNums(openFileResponse
+						.getBlockNumsList());
+				nameNodeSkelton = (INameNode) Naming.lookup("rmi://"
+						+ jTCnf.nameNodeIP + ":" + jTCnf.nameNodePort + "/"
+						+ jTCnf.nameNodeRefernce);
+				returnedMessage = nameNodeSkelton
+						.getBlockLocations(blockLocationRequestBuilder.build()
+								.toByteArray());
+				BlockLocationResponse blockLocationResponse = BlockLocationResponse
+						.parseFrom(returnedMessage);
+				System.out.println("Block Locations Recieved From Namenode"
+						+ blockLocationResponse.getBlockLocationsList());
+
+				status = blockLocationResponse.getStatus();
+
+				// /close file in HDFS
+				closeFileInHDFS(fileHandle);
+
+				if (status == 0) {
+					System.out.println("Error in retrieving blocks location..");
+					return null;
+				} else {
+					return blockLocationResponse;
+				}
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return null;
+	}
+
+	public void closeFileInHDFS(Integer fileHandle) {
+		try {
+			CloseFileRequest.Builder closeFileRequestBuilder = HDFS.CloseFileRequest
+					.newBuilder();
+
+			closeFileRequestBuilder.setHandle(fileHandle);
+
+			// calling remote open file request and retrieving response
+			INameNode nameNodeSkelton = (INameNode) Naming.lookup("rmi://"
+					+ jTCnf.nameNodeIP + ":" + jTCnf.nameNodePort + "/"
+					+ jTCnf.nameNodeRefernce);
+
+			byte[] returnedMessage = nameNodeSkelton
+					.closeFile(closeFileRequestBuilder.build().toByteArray());
+
+			CloseFileResponse closeFileResponse = CloseFileResponse
+					.parseFrom(returnedMessage);
+
+			int status = closeFileResponse.getStatus();
+
+			if (status == 0) {
+				System.out.println("Error in Closing File..");
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+}
