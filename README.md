@@ -4,7 +4,8 @@ The project invloves implementation of the two key core components:
 1. File System (Similar to HDFS)
 2. Map-Reduce Framework
 
-The project includes following key service:
+The project supports above functionality with following key services:
+
 A: Server Side 
  1. NameNode
  2. JobTracker
