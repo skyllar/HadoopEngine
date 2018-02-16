@@ -6,13 +6,13 @@ The project invloves implementation of the two key core components:
 
 The project supports above functionality with following key services:
 
-A: Server Side 
- 1. NameNode
- 2. JobTracker
+ A: Server Side 
+  1. NameNode
+  2. JobTracker
  
-B: Client Side
- 1. DataNode
- 2. TaskTracker
+ B: Client Side
+  1. DataNode
+  2. TaskTracker
 
 Some Background:
 DataNode will keep on sending "HeartBeat" to NameNode informing "am still ALIVE" as well as sends "BlockReport" giving information of all blocks present. Similar type of communication will happen between JobTracker and TaskTracker informing about: "Aliveness" and "Task Schedule/Completion reports".
